@@ -1,0 +1,26 @@
+[package]
+name = "yyterminal-editor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "yyte"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.28.1"
+ratatui = "0.29.0"
+portable-pty = "0.9.0"
+pulldown-cmark = "0.13"
+tempfile = "3"
+unicode-width = "0.2"
+sha2 = "0.10"
+yy-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-buffer = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-io = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-term = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-jobs = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-config = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
