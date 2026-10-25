@@ -9,6 +9,121 @@ use ratatui::{
 use yy_db_core::{plan::Plan, plan_visual as visual};
 pub const CARD_W: usize = 32;
 pub const CARD_H: usize = 11;
+
+/// SQLite EQP can omit the common parent (0) of scans in one SELECT.
+/// Retain native edges and raw output; explicitly label the display-only parent.
+pub fn prepare(mut plan: Plan) -> Result<Plan, String> {
+    visual::validate(&plan)?;
+    if plan.kind == yy_db_core::DbKind::MySql && !plan.actual {
+        // Feed the upstream parser its supported subquery container. Do not
+        // duplicate its operator/metric parsing, and keep native JSON verbatim.
+        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&plan.raw)
+            && mysql_projection_subqueries(&mut json, 0)?
+        {
+            let raw = plan.raw;
+            let queries: std::collections::HashSet<_> = plan
+                .nodes
+                .iter()
+                .filter_map(|n| n.properties.get("Query.Text").cloned())
+                .collect();
+            plan = Plan::parse(plan.kind, &json.to_string(), false)?;
+            plan.raw = raw;
+            if queries.len() == 1 {
+                for node in plan.nodes.iter_mut().filter(|n| n.parent.is_none()) {
+                    node.properties
+                        .insert("Query.Text".into(), queries.iter().next().unwrap().clone());
+                }
+            }
+        }
+    }
+    if !matches!(
+        plan.kind,
+        yy_db_core::DbKind::Sqlite | yy_db_core::DbKind::MySql
+    ) {
+        return Ok(plan);
+    }
+    let mut groups = std::collections::BTreeMap::<Option<String>, Vec<usize>>::new();
+    for (index, node) in plan.nodes.iter().enumerate() {
+        if node.parent.is_none() {
+            groups
+                .entry(node.properties.get("Query.Text").cloned())
+                .or_default()
+                .push(index);
+        }
+    }
+    for (query, roots) in groups {
+        if roots.len() < 2 {
+            continue;
+        }
+        let ids: std::collections::HashSet<_> = plan.nodes.iter().map(|node| node.id).collect();
+        let id = (0..=plan.nodes.len() as u64)
+            .find(|id| !ids.contains(id))
+            .ok_or("No free display node ID")?;
+        for index in roots {
+            plan.nodes[index].parent = Some(id);
+        }
+        let mut properties = std::collections::BTreeMap::from([
+            ("Display.Synthetic".into(), "true".into()),
+            (
+                "Detail".into(),
+                "Groups native roots from one statement; not a database join operator".into(),
+            ),
+        ]);
+        if let Some(query) = query {
+            properties.insert("Query.Text".into(), query);
+        }
+        plan.nodes.push(yy_db_core::plan::Node {
+            id,
+            parent: None,
+            operator: format!("{} query (display group)", plan.kind.name()),
+            object: String::new(),
+            estimated_rows: None,
+            actual_rows: None,
+            cost: None,
+            properties,
+        });
+    }
+    visual::validate(&plan)?;
+    Ok(plan)
+}
+
+fn mysql_projection_subqueries(
+    value: &mut serde_json::Value,
+    depth: usize,
+) -> Result<bool, String> {
+    if depth > 128 {
+        return Err("MySQL plan nesting exceeds 128".into());
+    }
+    let mut changed = false;
+    match value {
+        serde_json::Value::Object(map) => {
+            for child in map.values_mut() {
+                changed |= mysql_projection_subqueries(child, depth + 1)?;
+            }
+            if let Some(projected) = map.remove("select_list_subqueries") {
+                let mut projected = projected
+                    .as_array()
+                    .ok_or("Invalid MySQL select_list_subqueries")?
+                    .clone();
+                let attached = map
+                    .entry("attached_subqueries")
+                    .or_insert_with(|| serde_json::json!([]));
+                attached
+                    .as_array_mut()
+                    .ok_or("Invalid MySQL attached_subqueries")?
+                    .append(&mut projected);
+                changed = true;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                changed |= mysql_projection_subqueries(child, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(changed)
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Card {
     pub x: usize,
@@ -305,6 +420,82 @@ impl Painter<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mysql_projection_subqueries_reuse_parser_without_losing_other_subqueries()
+    -> Result<(), String> {
+        let raw = r#"{"query_block":{"select_id":1,"table":{"table_name":"c","access_type":"ALL"},"attached_subqueries":[{"query_block":{"select_id":2,"table":{"table_name":"a","access_type":"ref"}}}],"select_list_subqueries":[{"query_block":{"select_id":3,"table":{"table_name":"o","access_type":"ref"},"select_list_subqueries":[{"query_block":{"select_id":4,"table":{"table_name":"i","access_type":"ALL"}}}]}}]}}"#;
+        let original = Plan::parse(yy_db_core::DbKind::MySql, raw, false)?;
+        assert!(!original.nodes.iter().any(|n| n.object == "o"));
+        let plan = prepare(original)?;
+        assert_eq!(plan.raw, raw);
+        for id in ["1", "2", "3", "4"] {
+            assert!(
+                plan.nodes
+                    .iter()
+                    .any(|n| n.properties.get("select_id").is_some_and(|v| v == id))
+            );
+        }
+        for table in ["c", "a", "o", "i"] {
+            assert!(plan.nodes.iter().any(|n| n.object == table));
+        }
+        assert_eq!(plan.nodes.iter().filter(|n| n.parent.is_none()).count(), 1);
+        assert_eq!(
+            serde_json::to_value(prepare(plan.clone())?).unwrap(),
+            serde_json::to_value(plan).unwrap()
+        );
+        Ok(())
+    }
+    #[test]
+    fn sqlite_group_preserves_native_edges_raw_metrics_and_statement_boundaries()
+    -> Result<(), String> {
+        use std::collections::BTreeMap;
+        let node = |id, parent, query: &str| yy_db_core::plan::Node {
+            id,
+            parent,
+            operator: format!("SCAN t{id}"),
+            object: format!("t{id}"),
+            estimated_rows: None,
+            actual_rows: None,
+            cost: None,
+            properties: BTreeMap::from([("Query.Text".into(), query.into())]),
+        };
+        let plan = Plan {
+            version: 1,
+            kind: yy_db_core::DbKind::Sqlite,
+            actual: false,
+            raw: "original EQP output".into(),
+            nodes: vec![
+                node(0, None, "SELECT first"),
+                node(2, None, "SELECT first"),
+                node(3, Some(2), "SELECT first"),
+                node(4, None, "SELECT second"),
+            ],
+        };
+        let grouped = prepare(plan.clone())?;
+        assert_eq!(grouped.raw, plan.raw);
+        assert_eq!(grouped.nodes.len(), 5);
+        assert_eq!(grouped.nodes[0].parent, grouped.nodes[1].parent);
+        assert_eq!(grouped.nodes[2].parent, Some(2));
+        assert_eq!(grouped.nodes[3].parent, None);
+        let group = &grouped.nodes[4];
+        assert_eq!(group.properties["Display.Synthetic"], "true");
+        assert_eq!(group.properties["Query.Text"], "SELECT first");
+        assert!(
+            group.estimated_rows.is_none() && group.actual_rows.is_none() && group.cost.is_none()
+        );
+        let again = prepare(grouped.clone())?;
+        assert_eq!(
+            serde_json::to_value(again).unwrap(),
+            serde_json::to_value(grouped).unwrap()
+        );
+        let mut other = plan;
+        other.kind = yy_db_core::DbKind::PostgreSql;
+        assert_eq!(
+            serde_json::to_value(prepare(other.clone())?).unwrap(),
+            serde_json::to_value(other).unwrap()
+        );
+        Ok(())
+    }
     #[test]
     fn all_seven_database_plans_preserve_desktop_layout_and_render_small_viewports()
     -> Result<(), String> {

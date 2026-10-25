@@ -1036,3 +1036,43 @@ fn database_management_menus_are_local_in_real_terminal() -> Result<()> {
     app.wait("SQL editor")?;
     app.finish()
 }
+
+#[test]
+fn sqlite_join_plan_connects_in_real_terminal() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("join.sql");
+    std::fs::write(
+        &path,
+        "CREATE TABLE a(id INTEGER PRIMARY KEY); CREATE TABLE b(id INTEGER PRIMARY KEY,a_id INTEGER); INSERT INTO a VALUES(1); INSERT INTO b VALUES(1,1); SELECT a.id,b.id FROM a JOIN b ON b.a_id=a.id;",
+    )?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("DB Connect")?;
+    app.wait("Connected: SQLite / memory")?;
+    app.command("DB Execute")?;
+    app.wait("SQL complete:")?;
+    app.command("DB Query")?;
+    app.send(b"\x01\x1b[200~SELECT a.id,b.id FROM a JOIN b ON b.a_id=a.id;\x1b[201~")?;
+    app.command("DB Estimated plan")?;
+    app.wait("Execution plan ready")?;
+    app.wait_for(
+        "connected SQLite join and explicit display group",
+        |screen| {
+            let text = screen.screen_text();
+            text.contains("SQLite query (display group)") && text.contains('◀')
+        },
+    )?;
+    app._master.resize(PtySize {
+        cols: 60,
+        rows: 18,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    app.screen.resize(60, 18);
+    app.wait_for("SQLite plan after narrow resize", |screen| {
+        screen.screen_row(16).text().contains('┘') && screen.screen_text().contains("Plan")
+    })?;
+    app.command("Save")?;
+    app.wait("Saved")?;
+    app.finish()
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "name": "01-scan",
+    "sql": "SELECT department_id,name FROM departments ORDER BY department_id"
+  },
+  {
+    "name": "02-key-lookup",
+    "sql": "SELECT employee_id,name FROM employees WHERE employee_id=1"
+  },
+  {
+    "name": "03-two-table-join",
+    "sql": "SELECT e.employee_id,d.name FROM employees e JOIN departments d ON d.department_id=e.department_id"
+  },
+  {
+    "name": "04-left-self-join",
+    "sql": "SELECT e.employee_id,m.name FROM employees e LEFT JOIN employees m ON m.employee_id=e.manager_id"
+  },
+  {
+    "name": "05-three-table-join",
+    "sql": "SELECT o.order_id,c.name,e.name FROM orders o JOIN customers c ON c.customer_id=o.customer_id JOIN employees e ON e.employee_id=o.sales_rep_id"
+  },
+  {
+    "name": "06-five-table-aggregate",
+    "sql": "SELECT c.customer_id,e.name,p.name,SUM(i.quantity*i.unit_price) AS revenue FROM orders o JOIN customers c ON c.customer_id=o.customer_id JOIN employees e ON e.employee_id=o.sales_rep_id JOIN order_items i ON i.order_id=o.order_id JOIN products p ON p.product_id=i.product_id GROUP BY c.customer_id,e.name,p.name ORDER BY revenue DESC"
+  },
+  {
+    "name": "07-group-having-sort",
+    "sql": "SELECT customer_id,COUNT(*) AS n,SUM(total_amount) AS amount FROM orders GROUP BY customer_id HAVING COUNT(*)>0 ORDER BY amount DESC"
+  },
+  {
+    "name": "08-distinct-join",
+    "sql": "SELECT DISTINCT c.region,p.product_id FROM customers c JOIN orders o ON o.customer_id=c.customer_id JOIN order_items i ON i.order_id=o.order_id JOIN products p ON p.product_id=i.product_id"
+  },
+  {
+    "name": "09-correlated-exists",
+    "sql": "SELECT c.customer_id FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id=c.customer_id AND o.total_amount>0)"
+  },
+  {
+    "name": "10-correlated-not-exists",
+    "sql": "SELECT c.customer_id FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id=c.customer_id AND o.total_amount<0)"
+  },
+  {
+    "name": "11-in-subquery",
+    "sql": "SELECT employee_id FROM employees WHERE department_id IN (SELECT department_id FROM departments WHERE department_id>0)"
+  },
+  {
+    "name": "12-scalar-subquery",
+    "sql": "SELECT c.customer_id,(SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.customer_id) AS n FROM customers c"
+  },
+  {
+    "name": "13-derived-left-join",
+    "sql": "SELECT c.customer_id,s.amount FROM customers c LEFT JOIN (SELECT customer_id,SUM(total_amount) AS amount FROM orders GROUP BY customer_id) s ON s.customer_id=c.customer_id"
+  },
+  {
+    "name": "14-cte-window",
+    "sql": "WITH ranked AS (SELECT employee_id,department_id,ROW_NUMBER() OVER (PARTITION BY department_id ORDER BY salary DESC,employee_id) AS rn FROM employees) SELECT r.employee_id,d.name FROM ranked r JOIN departments d ON d.department_id=r.department_id WHERE r.rn=1"
+  },
+  {
+    "name": "15-union-all",
+    "sql": "SELECT customer_id AS entity_id FROM customers WHERE customer_id<3 UNION ALL SELECT employee_id AS entity_id FROM employees WHERE employee_id<3 ORDER BY entity_id"
+  }
+]

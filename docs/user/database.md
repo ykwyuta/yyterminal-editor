@@ -181,3 +181,9 @@ DBドライバーとDuckDBのライセンス表示は [database-driver-notices.m
 ## 実際の画面例
 
 5DBの実接続から取得した計画の[実行計画ペインの出力例](database-plan-examples.md)を掲載しています。色付き画像と同じ内容のテキストを確認できます。
+
+### SQLiteとMySQLの表示用グループ
+
+SQLiteのEXPLAIN QUERY PLANは、同じSELECTの結合アクセスや一時ソートを複数の親なしノードとして返すことがあります。この場合は`SQLite query (display group)`へ接続し、同じSQLの計画として表示します。このノードは画面上の分類であり、DBが報告したJOIN演算子ではありません。詳細の`Display.Synthetic=true`で区別できます。元のEQP・既存の親子関係・計測値は保持し、DBが返さないコストや実測値は追加しません。
+
+MySQLの実測TREEが主問い合わせとSELECT句内サブクエリを別の親なしノードとして返す場合も、同じSQLなら表示用グループにまとめます。推定JSONの`select_list_subqueries`も表示します。保存した`.yyplan`とSVGには表示用グループを含み、原文表示では元のDB出力を確認できます。

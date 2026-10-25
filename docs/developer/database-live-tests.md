@@ -45,3 +45,23 @@ YYDBMANAGER_DEMO=/path/to/yyeditor/demo/yydbmanager \
 ```
 
 ComposeとSQLの修正、独自の初期データや実測収集モニターの追加は、この共通シナリオでは行いません。
+
+## 15種類の実行計画シナリオ
+
+`demo/database/plan-scenarios.json`の15SQLを`tests/plan_scenarios.rs`で検証する。単表走査、主キー検索、2表結合、自己外部結合、3表結合、5表集約、HAVINGとソート、DISTINCT結合、EXISTS、NOT EXISTS、IN、相関スカラー副問い合わせ、集約派生表の外部結合、CTEとウィンドウ関数、UNION ALLを含む。
+
+```sh
+# SQLite/DuckDBのみ。通常のcargo testでも実行する。
+cargo test --locked --test plan_scenarios
+# 既存のオリジナルデモ5DBも含める。共有デモ表は変更しない。
+YYDBMANAGER_HOST=127.0.0.1 YYTE_PLAN_REPORTDIR=/new/report/directory \
+  cargo test --locked --test plan_scenarios -- --include-ignored --nocapture --test-threads=1
+```
+
+SQLiteのノード別実測とDb2のactivity monitorが必要な実測は対象外。推定105件、対応5DBの実測75件、計180計画を取得する。SQLite/DuckDBだけは専用メモリDBに小さな独立データを作る。その他はオリジナルデモのデータをSELECTする。
+
+元DBの計画と各表示カード・接続線を照合し、全接続線の各セル、ノード/接続線のクリック領域、小画面と画面外パン、SVG出力、yyplan保存往復を検証する。SQLiteは元ノードと既存親子関係の保持、MySQLの推定JSONは全select_idの表示も確認する。120秒以内にワーカー応答を待ち、失敗時に接続線の端末画面を出力する。接続を閉じ、ワーカーを回収する。
+
+レポート指定時はDB別・シナリオ別にSQL、plan.yyplan、plan.svg、screens.txtとverification.jsonを残す。既存計画の上書きは禁止されるので、再実行には新しいレポート先を指定する。未指定時は一時ディレクトリを使う。
+
+`database_plan::prepare`は共有パーサーの前後の薄い表示アダプター。SQLite/MySQLの同一SQLの複数ルートを、計測値を持たない表示用親へ接続する。MySQLのSELECT句内サブクエリは共有パーサーが対応済みのコンテナ名へ変換して再解析し、原文を戻す。共有クレートのソースや解析ロジックは複製しない。

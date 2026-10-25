@@ -406,9 +406,9 @@ impl Worker {
                             active.clear();
                             Ok(Reply::Disconnected)
                         }
-                        Request::LoadPlan(path) => {
-                            Ok(Reply::Plan(yy_db_core::plan_file::load(&path)?))
-                        }
+                        Request::LoadPlan(path) => Ok(Reply::Plan(crate::database_plan::prepare(
+                            yy_db_core::plan_file::load(&path)?,
+                        )?)),
                         Request::PlanSvg(path, plan) => {
                             let doc = plan.drawing();
                             let text = yy_draw::render::Renderer::new(None)
@@ -493,7 +493,9 @@ impl Worker {
                                     } else {
                                         sql
                                     };
-                                    Ok(Reply::Plan(s.db.explain(&sql, actual, &flag)?))
+                                    Ok(Reply::Plan(crate::database_plan::prepare(
+                                        s.db.explain(&sql, actual, &flag)?,
+                                    )?))
                                 }
                                 Request::Copy {
                                     set,
