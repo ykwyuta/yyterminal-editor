@@ -201,7 +201,11 @@ impl Output {
             self.remaining(),
         );
         self.clipped |= clipped;
-        let content_width = rows.iter().map(Line::width).max().unwrap_or(0);
+        let content_width = if boxed {
+            self.width.saturating_sub(4)
+        } else {
+            rows.iter().map(Line::width).max().unwrap_or(0)
+        };
         if boxed {
             let (tl, tr, bl, br, horizontal, vertical) = if level == HeadingLevel::H1 {
                 ('╔', '╗', '╚', '╝', '═', '║')
@@ -253,12 +257,28 @@ impl Output {
 }
 impl Rendered {
     /// O(viewport size), including positions beyond u16::MAX.
-    pub fn viewport(&self, top: usize, left: usize, width: u16, height: u16) -> Vec<Line<'static>> {
+    pub fn viewport(&self, top: usize, left: usize, width: u16, height: u16) -> Vec<Line<'_>> {
         self.lines
             .iter()
             .skip(top)
             .take(usize::from(height))
-            .map(|line| crate::preview_layout::clip(line, left, usize::from(width)))
+            .map(|line| {
+                // Paragraph already clips its right edge. Preserve cached styled spans
+                // instead of segmenting every visible grapheme again on vertical scroll.
+                if left == 0 && self.width <= usize::from(width) {
+                    let mut borrowed = Line::from(
+                        line.spans
+                            .iter()
+                            .map(|span| Span::styled(span.content.as_ref(), span.style))
+                            .collect::<Vec<_>>(),
+                    );
+                    borrowed.style = line.style;
+                    borrowed.alignment = line.alignment;
+                    borrowed
+                } else {
+                    crate::preview_layout::clip(line, left, usize::from(width))
+                }
+            })
             .collect()
     }
     pub fn max_left(&self) -> usize {
@@ -464,7 +484,17 @@ fn render_limited(
                         }
                     } else {
                         let mut highlighter = crate::syntax::CodeHighlighter::new(&lang);
-                        lines.extend(source.lines().map(|s| highlighter.line(s)));
+                        for source_line in source.lines() {
+                            lines.before_content();
+                            let start = lines.lines.len();
+                            lines.push(highlighter.line(source_line));
+                            for row in &mut lines.lines[start..] {
+                                row.style = row.style.bg(Color::Rgb(30, 36, 46));
+                                for span in &mut row.spans {
+                                    span.style = span.style.bg(Color::Rgb(30, 36, 46));
+                                }
+                            }
+                        }
                     }
                 }
                 lines.separate();
@@ -571,10 +601,11 @@ fn render_limited(
             Event::Text(t) => spans.push(Span::styled(text(&t), *inline_styles.last().unwrap())),
             Event::Code(t) => spans.push(Span::styled(
                 text(&t),
-                inline_styles
-                    .last()
-                    .unwrap()
-                    .patch(Style::default().fg(Color::Yellow)),
+                inline_styles.last().unwrap().patch(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(30, 36, 46)),
+                ),
             )),
             Event::SoftBreak | Event::HardBreak => {
                 if heading.is_some() {
@@ -659,6 +690,25 @@ pub fn read_markdown(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn viewport_reuses_cached_text_and_keeps_styles_and_narrow_clipping() {
+        let style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        let rendered = Rendered {
+            width: 8,
+            lines: vec![Line::styled("日本語AB".to_owned(), style)],
+        };
+        let full = rendered.viewport(0, 0, 10, 1);
+        assert_eq!(full[0].style, style);
+        assert!(matches!(
+            full[0].spans[0].content,
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(rendered.viewport(0, 0, 4, 1)[0].to_string(), "日本");
+        assert_eq!(rendered.viewport(0, 1, 3, 1)[0].to_string(), " 本");
+        assert!(rendered.viewport(0, 0, 10, 0).is_empty());
+    }
     #[test]
     fn image_dimensions_color_transparency_and_plain_raster() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -894,11 +944,11 @@ mod tests {
         let rendered = render(source, &Options::new(PathBuf::from("."), 80));
         assert_eq!(
             rendered.plain(),
-            "╔═════════╗\n║ Heading ║\n╚═════════╝\n\nFirst paragraph.\n\n• one\n• two\n\nSecond paragraph.\n\nThird paragraph.\n\n┌──────────────┐\n│ Next heading │\n└──────────────┘\n\nLast paragraph."
+            "╔══════════════════════════════════════════════════════════════════════════════╗\n║ Heading                                                                      ║\n╚══════════════════════════════════════════════════════════════════════════════╝\n\nFirst paragraph.\n\n• one\n• two\n\nSecond paragraph.\n\nThird paragraph.\n\n┌──────────────────────────────────────────────────────────────────────────────┐\n│ Next heading                                                                 │\n└──────────────────────────────────────────────────────────────────────────────┘\n\nLast paragraph."
         );
         assert_eq!(
             render("# One\n## Two\n", &Options::new(PathBuf::from("."), 80)).plain(),
-            "╔═════╗\n║ One ║\n╚═════╝\n\n┌─────┐\n│ Two │\n└─────┘"
+            "╔══════════════════════════════════════════════════════════════════════════════╗\n║ One                                                                          ║\n╚══════════════════════════════════════════════════════════════════════════════╝\n\n┌──────────────────────────────────────────────────────────────────────────────┐\n│ Two                                                                          │\n└──────────────────────────────────────────────────────────────────────────────┘"
         );
     }
     #[test]
@@ -940,8 +990,8 @@ mod tests {
         let result = render(source, &Options::new(PathBuf::from("."), 30));
         let plain = result.plain();
         for expected in [
-            "╔═════╗\n║ One ║\n╚═════╝",
-            "┌─────┐\n│ Two │\n└─────┘",
+            "╔════════════════════════════╗\n║ One                        ║\n╚════════════════════════════╝",
+            "┌────────────────────────────┐\n│ Two                        │\n└────────────────────────────┘",
             "Three\n━━━━━",
             "Four\n────",
             "▎ Five",
@@ -1068,5 +1118,32 @@ mod tests {
         let rendered = render_limited("日本語日本語", &opts, 8, 100).plain();
         assert!(rendered.contains("truncated"));
         assert!(!rendered.contains('�'));
+    }
+    #[test]
+    fn code_background_covers_wrapped_and_empty_rows_without_leaking() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{Paragraph, Widget},
+        };
+        let result = render(
+            "```rust\nlet x = 123456789;\n\nx\n```\n\nBody",
+            &Options::new(PathBuf::from("."), 10),
+        );
+        let area = Rect::new(0, 0, 10, result.lines.len() as u16);
+        let mut buffer = Buffer::empty(area);
+        for (y, line) in result.lines.iter().enumerate() {
+            buffer.set_style(Rect::new(0, y as u16, 10, 1), line.style);
+        }
+        Paragraph::new(result.viewport(0, 0, 10, area.height)).render(area, &mut buffer);
+        for (y, line) in result.lines.iter().enumerate() {
+            if line.style.bg.is_some() {
+                for x in 0..10 {
+                    assert_eq!(buffer[(x, y as u16)].bg, Color::Rgb(30, 36, 46));
+                }
+            }
+        }
+        assert_eq!(buffer[(0, area.height - 1)].bg, Color::Reset);
+        assert!(result.lines.iter().filter(|l| l.style.bg.is_some()).count() >= 4);
     }
 }

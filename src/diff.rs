@@ -43,7 +43,11 @@ impl Comparison {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn text(&self, row: large::Row, left: bool) -> String {
+        self.preview(row, left, 4096)
+    }
+    pub fn preview(&self, row: large::Row, left: bool, limit: u64) -> String {
         let (snap, at, len) = if left {
             (&self.left, row.left, row.left_len)
         } else {
@@ -52,8 +56,15 @@ impl Comparison {
         if at == large::NONE {
             return String::new();
         }
-        let bytes = snap.read(at..at + len.min(4096));
-        let mut text = String::from_utf8_lossy(&bytes)
+        let bytes = snap.read(at..at + len.min(limit));
+        let mut end = bytes.len();
+        if len > limit
+            && let Err(error) = std::str::from_utf8(&bytes[..end])
+            && error.error_len().is_none()
+        {
+            end = error.valid_up_to();
+        }
+        let mut text = String::from_utf8_lossy(&bytes[..end])
             .chars()
             .map(|c| match c {
                 '\n' => '↵',
@@ -63,7 +74,7 @@ impl Comparison {
                 c => c,
             })
             .collect::<String>();
-        if len > 4096 {
+        if len > limit {
             text.push('…');
         }
         text
@@ -93,6 +104,32 @@ mod tests {
         assert_eq!(diff.top, 3);
         diff.jump(true)?;
         assert_eq!(diff.top, 2);
+        Ok(())
+    }
+    #[test]
+    fn unicode_prefix_and_sparse_changes_keep_paged_alignment() -> Result<()> {
+        let left = (0..10000)
+            .map(|n| format!("{n}:日本語👩‍💻\r\n"))
+            .collect::<String>();
+        let right = left.replace("7000:日本語", "7000:変更");
+        let mut diff = Comparison::new(
+            Snapshot::from_bytes(left.into_bytes()),
+            Snapshot::from_bytes(right.into_bytes()),
+            "unicode".into(),
+        )?;
+        diff.jump(false)?;
+        assert_eq!(diff.top, 7000);
+        for row in diff.rows(20)? {
+            for side in [true, false] {
+                let text = diff.preview(row, side, 7);
+                assert!(!text.contains('�'), "{text}");
+                assert!(text.ends_with('…'));
+            }
+        }
+        diff.top = 9999;
+        assert_eq!(diff.rows(50)?.len(), 1);
+        diff.jump(true)?;
+        assert_eq!(diff.top, 7000);
         Ok(())
     }
 }

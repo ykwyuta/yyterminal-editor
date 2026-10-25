@@ -551,14 +551,21 @@ fn mouse_terminal_tabs_and_live_split_preview() -> Result<()> {
     app.wait("# Sample")?;
     app.click_text("Terminal 2")?;
     app.wait("BACKGROUND")?;
-    let row = app.screen.screen_row(1).text();
-    let start = row.find("[Terminal 2]").context("Terminal tab missing")?;
+    let (tab_row, row) = (0..app.screen.rows())
+        .find_map(|y| {
+            let row = app.screen.screen_row(y).text();
+            row.contains("[Terminal 2]").then_some((y, row))
+        })
+        .with_context(|| format!("Terminal tab missing: {}", app.screen.screen_text()))?;
+    let start = row.find("[Terminal 2]").unwrap();
     let close = start
         + row[start..]
             .find(" x ")
             .context("Close tab button missing")?
         + 1;
-    app.send(format!("\x1b[<0;{};2M\x1b[<0;{};2m", close + 1, close + 1).as_bytes())?;
+    let col = unicode_width::UnicodeWidthStr::width(&row[..close]) + 1;
+    let y = tab_row + 1;
+    app.send(format!("\x1b[<0;{col};{y}M\x1b[<0;{col};{y}m").as_bytes())?;
     app.wait_for("terminal tab closed", |s| {
         !s.screen_text().contains("Terminal 2") && s.screen_text().contains("# Sample")
     })?;
@@ -654,7 +661,13 @@ fn categorized_menus_tree_wrapping_open_modes_and_language_persist() -> Result<(
     app.click_text("View")?;
     app.wait("Folder tree")?;
     app.click_text("Folder tree")?;
-    app.wait("Explorer / Tree")?;
+    app.wait_for("tree entries refreshed after preferences created", |s| {
+        let text = s.screen_text();
+        text.contains("Explorer / Tree")
+            && text.contains("Explorer loaded")
+            && text.contains(".yyte-test-config")
+            && !text.contains("[Working]")
+    })?;
     app.click_text("folder")?;
     app.wait("target.csv")?;
     ensure!(
@@ -926,4 +939,58 @@ fn preview_block_spacing_is_visible_in_editor_and_standalone_viewer() -> Result<
         "Preview changed Markdown source"
     );
     Ok(())
+}
+
+#[test]
+fn database_query_grid_plan_mouse_and_resize_use_real_terminal() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("query.sql");
+    std::fs::write(
+        &path,
+        "SELECT 9223372036854775807 AS exact_integer,'東京' AS city UNION ALL SELECT 42,'大阪';\n",
+    )?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("DB Connect")?;
+    app.wait("Connected: SQLite / memory")?;
+    app.command("DB Execute")?;
+    app.wait("SQL complete:")?;
+    app.wait("9223372036854775807")?;
+    app.wait("東京")?;
+    app.wait_for("spreadsheet result header and grid", |s| {
+        s.screen_text().contains("exact_integer")
+            && s.screen_text().contains("2 rows")
+            && s.screen_text().contains("Results")
+    })?;
+    app.send(b"\x1b[C\x03")?;
+    app.wait("Result selection copied")?;
+    app.command("DB Column width")?;
+    app.send(b"20\r")?;
+    app.command("DB Estimated plan")?;
+    app.wait("Execution plan ready")?;
+    app.wait("Operator properties")?;
+    app.command("DB Open plan")?;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("demo/database/sqlserver-hash-sort.sqlplan");
+    app.send(format!("\x1b[200~{}\x1b[201~\r", fixture.display()).as_bytes())?;
+    app.wait_for("SQL Server plan", |s| {
+        s.screen_text().contains("SQL Server")
+            && s.screen_text().contains("Actual")
+            && s.screen_text().contains("Operator properties")
+    })?;
+    app.command("DB Next operator")?;
+    app.wait("Cost:")?;
+    app._master.resize(PtySize {
+        cols: 60,
+        rows: 18,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    app.screen.resize(60, 18);
+    app.wait_for("resized database frame", |s| {
+        s.screen_row(16).text().contains('┘') && s.screen_text().contains("Database")
+    })?;
+    app.command("DB Query")?;
+    app.wait("SQL editor")?;
+    app.finish()
 }

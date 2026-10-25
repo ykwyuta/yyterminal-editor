@@ -126,7 +126,7 @@ GitHub上で対象SHAの4ジョブが成功した後、配布資材を取得し�
 
 ```sh
 gh run download RUN_ID --repo ykwyuta/yyterminal-editor --dir target/distribution/artifacts
-python tools/release.py package --artifacts target/distribution/artifacts --output target/distribution/packages --version v0.5 --commit FULL_COMMIT_SHA --ci-run https://github.com/ykwyuta/yyterminal-editor/actions/runs/RUN_ID
+python tools/release.py package --artifacts target/distribution/artifacts --output target/distribution/packages --version v0.7 --commit FULL_COMMIT_SHA --ci-run https://github.com/ykwyuta/yyterminal-editor/actions/runs/RUN_ID
 ```
 
 WindowsはZIP、Linuxは実行権限付きtar.gz。ファイル名の `x86_64`／`arm64` がCPUを示す。4種類すべてを必須とし、実行形式の機械種別が一致しない場合や既存のステージがある場合は失敗させる。ヘルプ・デモ・README・ライセンスは指定コミットから取得する。BUILDINFO.jsonにソースSHA・CI・ターゲット・バイナリSHA-256を記録し、SHA256SUMS.txtを出力する。ARM資材をx86ホストで実行したとは表現せず、CIのネイティブ検証結果を使う。
@@ -134,5 +134,22 @@ WindowsはZIP、Linuxは実行権限付きtar.gz。ファイル名の `x86_64`�
 ランナーの対応は[GitHub公式仕様](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)を参照。Markdownのブロック間余白は `Output` の遅延した区切りとして処理し、段落・見出し・リスト・表・コードの境界で1行だけ確保する。区切りも描画行数予算に含む。
 
 
-見出しの装飾は `Output::heading` で組版する。H1/H2は内容の表示幅に合わせた二重／一重の箱、H3/H4は太い／細い下線、H5/H6は別の接頭記号を付ける。書記素単位の折り返しと装飾行の追加に同じ行数予算を適用し、幅が6セル未満では箱を使わない。
+見出しの装飾は `Output::heading` で組版する。H1/H2はプレビュー幅いっぱいの二重／一重の箱、H3/H4は太い／細い下線、H5/H6は別の接頭記号を付ける。書記素単位の折り返しと装飾行の追加に同じ行数予算を適用し、幅が6セル未満では箱を使わない。
 リストは開始番号を持つスタックと項目ごとの接頭記号・初回フラグを分離する。`Output::push` は記号幅を差し引いて本文を折り返し、続きの行に同じ幅の空白を付ける。項目内の追加段落でも記号を繰り返さない。インライン装飾はスタイルのスタックで合成・復帰する。実端末の図表示試験は表示領域と共通レンダラーから接続情報の位置を算出し、固定ページ数を仮定しない。
+
+
+## データベース機能
+
+`yy-db-core` を他のYYクレートと同じ完全SHAで参照する。接続・SQL分割・実行・スプール・計画ファイル解析・計画ラベルとコスト・ERモデル・転送の実装をコピーしない。`database.rs` の専用ワーカーがセッションと結果セットを保持し、UIは128行のページと要約だけを受け取る。接続セッションは名前ごとに保持し、切断時に破棄する。UIのDropで中断し、チャンネルを閉じてワーカーをjoinする。
+
+`db_app.rs` は接続ウィザード、オブジェクトツリー、SQLタブ、結果グリッド、プロパティ、ERとメニューを仲介する。`database_plan.rs` は元のdrawingの配置をセル座標へ変換し、元のlabels/details/flow_width/warningを使用する。画面内だけを描き、巨大なキャンバスを全セル展開しない。図の選択はデータ上のノードindexへ対応し、エッジのプロパティも区別する。ER文書のview情報は読み込み・再保存時に保持する。
+
+Linuxは `apt-get install unixodbc-dev libssl-dev pkg-config cmake` が必要。DuckDB 1.4.1の同梱C++ビルドのためCIは2ジョブを上限とし、初回ビルドの時間枠とキャッシュを分ける。Windows x64はVS 2022を維持する。ARM64は各ネイティブCIで検証する。
+
+Windowsのモデル／画面バッファ試験のほか、Linux実端末試験でSQLの結果・コピー・計画とサイズ変更を確認する。7種類の計画fixtureは `demo/database` に置く。直接接続の実サーバー試験とファイルだけの描画試験は区別する。
+
+- [外部5DB実接続試験（yydbmanagerと同じCompose・シナリオ）](database-live-tests.md)
+
+実DBの画面例を更新する場合は `python tools/render_plan_examples.py target/database-live/<成功した実行時刻>` を使います。本体の描画関数から利用者向けSVG・テキストを生成します。
+
+- [描画性能の測定とキャッシュ検証](render-performance.md)

@@ -1,0 +1,36 @@
+┌Plan · right → left · Tab next operator · arrows pan───────────────────────────────────────────────────────────────────┐┌Operator properties · PgUp/PgDn──────────────────────────┐
+│Query 1 · SQL Server · Actual (cost is estimated)                                                                      ││表示対象: Sort                                           │
+│                                                                                                                       ││Node ID: 0                                               │
+│┌──────────────────────────────┐            ┌──────────────────────────────┐            ┌──────────────────────────────││Physical Operation: Sort                                 │
+││[→] #1                        │       156  │[↕] #2                        │       834.6│[→] #3                        ││処理内容: Sort                                           │
+││SELECT                        │◀───────────│Sort                          │◀━━━━━━━━━━━│Compute Scalar                ││統計の意味: コストはオプティマイザー推定値。Cost         │
+││Cost: 0%                      │            │Cost: 11%                     │            │Cost: 0%                      ││%は文内の演算子比率。実測時間とは異なります              │
+││推定行数: 834.63              │            │5 ms                          │            │推定行数: 834.63              ││Logical Operation: Sort                                  │
+││                              │            │行数 156 / 推定 834.63        │            │                              ││Estimated Number of Rows: 834.63                         │
+││                              │            │                              │            │                              ││Estimated Rows (all executions): 834.63                  │
+││                              │            │                              │            │                              ││Actual Number of Rows: 156                               │
+││                              │            │                              │            │                              ││行数推定の乖離（大きい側／小さい側）: 5.4倍（1実行あたり）
+││                              │            │                              │            │                              ││Actual Elapsed Time (max thread, ms): 5                  │
+│└──────────────────────────────┘            └──────────────────────────────┘            └──────────────────────────────││Estimated Operator Cost: 0.024                           │
+│                                                                                                                       ││Estimated Cost %: 11.4%                                  │
+│                                                                                                                       ││Estimated Subtree Cost: 0.21                             │
+│                                                                                                                       ││AvgRowSize: 186                                          │
+│                                                                                                                       ││EstimateCPU: 0.0127363                                   │
+│                                                                                                                       ││EstimateIO: 0.0112613                                    │
+│                                                                                                                       ││EstimateRebinds: 0                                       │
+│                                                                                                                       ││EstimateRewinds: 0                                       │
+│                                                                                                                       ││EstimateRows: 834.63                                     │
+│                                                                                                                       ││EstimatedExecutionMode: Row                              │
+│                                                                                                                       ││EstimatedTotalSubtreeCost: 0.210184                      │
+│                                                                                                                       ││OrderBy: <OrderBy><OrderByColumn                         │
+│                                                                                                                       ││Ascending="0"><ColumnReference                           │
+│                                                                                                                       ││Column="Expr1006"></ColumnReference></OrderByColumn><Orde│
+│                                                                                                                       ││rByColumn Ascending="1"><ColumnReference                 │
+│                                                                                                                       ││Database="[yydemo]" Schema="[dbo]" Table="[customers]"   │
+│                                                                                                                       ││Alias="[c]"                                              │
+│                                                                                                                       ││Column="customer_code"></ColumnReference></OrderByColumn>│
+│                                                                                                                       ││<OrderByColumn Ascending="1"><ColumnReference            │
+│                                                                                                                       ││Database="[yydemo]" Schema="[dbo]" Table="[products]"    │
+│                                                                                                                       ││Alias="[p]"                                              │
+│                                                                                                                       ││Column="name"></ColumnReference></OrderByColumn></OrderBy│
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────┘

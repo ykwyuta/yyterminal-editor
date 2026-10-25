@@ -1,0 +1,36 @@
+┌Plan · right → left · Tab next operator · arrows pan───────────────────────────────────────────────────────────────────┐┌Operator properties · PgUp/PgDn──────────────────────────┐
+│Query 1 · Oracle · Actual (cost is estimated)                                                                          ││表示対象: SELECT STATEMENT                               │
+│                                                                                                                       ││Node ID: 0                                               │
+│┌──────────────────────────────┐            ┌──────────────────────────────┐            ┌──────────────────────────────││Physical Operation: SELECT STATEMENT                     │
+││[→] #0                        │       156  │[↕] #1                        │       156  │[Σ] #2                        ││処理内容: SELECT STATEMENT                               │
+││SELECT STATEMENT              │◀───────────│SORT ORDER BY                 │◀───────────│Aggregate                     ││統計の意味:                                              │
+││推定コスト: 21                │            │推定コスト: 21                │            │(HASH GROUP BY)               ││コストとTIMEは推定値。LAST_OUTPUT_ROWS/経過時間は最後の実│
+││2.098 ms                      │            │2.098 ms                      │            │推定コスト: 21                ││行の全starts合計。経過時間は子を含むms                   │
+││行数 156 / 推定 —             │            │行数 156 / 推定 1200          │            │1.996 ms                      ││Estimated Number of Rows: —                              │
+││                              │            │                              │            │行数 156 / 推定 1200          ││Estimated Rows (all executions): —                       │
+││                              │            │                              │            │                              ││Actual Number of Rows: 156                               │
+││                              │            │                              │            │                              ││Actual Elapsed Time (all starts, inclusive, ms): 2.098   │
+││                              │            │                              │            │                              ││Native Estimated Cost: 21                                │
+│└──────────────────────────────┘            └──────────────────────────────┘            └──────────────────────────────││ACCESS_PREDICATES: NULL                                  │
+│                                                                                                                       ││FILTER_PREDICATES: NULL                                  │
+│                                                                                                                       ││Actual Elapsed ms: 2.098                                 │
+│                                                                                                                       ││Actual Starts: 1                                         │
+│                                                                                                                       ││BYTES: NULL                                              │
+│                                                                                                                       ││Cursor.CHILD_NUMBER: 0                                   │
+│                                                                                                                       ││Cursor.SQL_ID: b9tfuj295dc7d                             │
+│                                                                                                                       ││DISTRIBUTION: NULL                                       │
+│                                                                                                                       ││LAST_CR_BUFFER_GETS: 40                                  │
+│                                                                                                                       ││LAST_CU_BUFFER_GETS: 0                                   │
+│                                                                                                                       ││LAST_DISK_READS: 0                                       │
+│                                                                                                                       ││LAST_DISK_WRITES: 0                                      │
+│                                                                                                                       ││LAST_ELAPSED_TIME: 2098                                  │
+│                                                                                                                       ││LAST_EXECUTION: NULL                                     │
+│                                                                                                                       ││LAST_MEMORY_USED: NULL                                   │
+│                                                                                                                       ││LAST_OUTPUT_ROWS: 156                                    │
+│                                                                                                                       ││LAST_STARTS: 1                                           │
+│                                                                                                                       ││LAST_TEMPSEG_SIZE: NULL                                  │
+│                                                                                                                       ││OBJECT_TYPE: NULL                                        │
+│                                                                                                                       ││PARTITION_START: NULL                                    │
+│                                                                                                                       ││PARTITION_STOP: NULL                                     │
+│                                                                                                                       ││Query.Text: SELECT c.customer_code,c.name AS             │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────┘

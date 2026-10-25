@@ -1,4 +1,5 @@
 mod data;
+mod db_app;
 mod diff;
 mod editor;
 mod fixed_export;
@@ -20,7 +21,11 @@ use std::{
 use ui::draw;
 use unicode_width::UnicodeWidthStr;
 
-const HELP: &str = include_str!("../docs/user/help.md");
+const HELP: &str = concat!(
+    include_str!("../docs/user/help.md"),
+    "\n\n",
+    include_str!("../docs/user/database.md")
+);
 use yyterminal_editor::commands::{COMMANDS, Language, MENUS, OPEN_MODES, label};
 #[derive(Clone, Copy, PartialEq)]
 enum View {
@@ -32,6 +37,7 @@ enum View {
     Diff,
     Preview,
     Help,
+    Database,
 }
 enum Message {
     Preview(yyterminal_editor::preview::Rendered),
@@ -86,10 +92,13 @@ enum Prompt {
     LayoutSave,
     LayoutInfer,
     Quit,
+    CloseTab(usize),
+    Database(db_app::Input),
 }
 #[derive(Clone, Copy)]
 enum MouseAction {
     Run(&'static str),
+    Database(db_app::Hit),
     Tab(usize),
     CloseTab(usize),
     TabPage(bool),
@@ -130,6 +139,7 @@ impl ResizeDrag {
     }
 }
 struct App {
+    db: Option<db_app::State>,
     root: PathBuf,
     roots: Vec<PathBuf>,
     encoding: Option<yy_core::Encoding>,
@@ -152,6 +162,7 @@ struct App {
     output: String,
     preview: yyterminal_editor::preview::Rendered,
     preview_pending: bool,
+    preview_raster: yyterminal_editor::render_cache::RasterViewport,
     preview_key: Option<(usize, yy_core::Version, u16, bool)>,
     preview_remote: bool,
     comparison: Option<diff::Comparison>,
@@ -187,6 +198,7 @@ impl App {
     fn new(root: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         let mut app = Self {
+            db: None,
             roots: vec![root.clone()],
             encoding: None,
             root,
@@ -209,6 +221,7 @@ impl App {
             output: String::new(),
             preview: Default::default(),
             preview_pending: false,
+            preview_raster: Default::default(),
             preview_key: None,
             preview_remote: false,
             comparison: None,
@@ -244,6 +257,9 @@ impl App {
         app
     }
     fn menu_commands(&self) -> &'static [&'static str] {
+        if self.db.as_ref().is_some_and(|d| d.type_menu) {
+            return self.db_type_choices();
+        }
         if self.context_path.is_some() {
             OPEN_MODES
         } else if let Some(group) = self.menu_group {
@@ -253,12 +269,18 @@ impl App {
         }
     }
     fn show_menu(&mut self, group: usize) {
+        if let Some(d) = &mut self.db {
+            d.type_menu = false;
+        }
         self.context_path = None;
         self.menu_group = Some(group);
         self.palette = Some(0);
         self.palette_offset = 0;
     }
     fn close_menu(&mut self) {
+        if let Some(d) = &mut self.db {
+            d.type_menu = false;
+        }
         self.palette = None;
         self.palette_offset = 0;
         self.menu_group = None;
@@ -266,6 +288,10 @@ impl App {
     }
     fn run_menu(&mut self, index: usize) {
         let name = self.menu_commands()[index];
+        if self.db.as_ref().is_some_and(|d| d.type_menu) {
+            self.db_pick_type(name);
+            return;
+        }
         let path = self.context_path.clone();
         self.close_menu();
         if let Some(path) = path {
@@ -388,7 +414,9 @@ impl App {
             View::Terminal
         } else {
             self.last_document = tab;
-            if self.tabs[tab].spreadsheet {
+            if self.tabs[tab].database {
+                View::Database
+            } else if self.tabs[tab].spreadsheet {
                 View::Sheet
             } else if self.tabs[tab].raw || self.tabs[tab].table.is_some() {
                 View::Table
@@ -465,6 +493,19 @@ impl App {
         });
     }
     fn open(&mut self, path: PathBuf) {
+        if path.extension().is_some_and(|e| {
+            ["yyplan", "sqlplan", "db2plan"]
+                .iter()
+                .any(|ext| e.eq_ignore_ascii_case(ext))
+        }) {
+            self.command("DB Manager");
+            self.db
+                .as_mut()
+                .unwrap()
+                .send(yyterminal_editor::database::Request::LoadPlan(path));
+            return;
+        }
+
         if self.busy {
             return;
         }
@@ -675,12 +716,13 @@ impl App {
         });
     }
     fn poll(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.db_poll();
         while let Ok(message) = self.rx.try_recv() {
             changed = true;
             let message = match message {
                 Message::Preview(rendered) => {
                     self.preview = rendered;
+                    self.preview_raster.clear();
                     self.preview_pending = false;
                     if self.view == View::Preview {
                         self.status = "Markdown preview ready".into();
@@ -1006,6 +1048,11 @@ impl App {
         }
     }
     fn mouse(&mut self, event: event::MouseEvent) {
+        self.mouse_repeated(event, 1);
+    }
+    fn mouse_repeated(&mut self, event: event::MouseEvent, repeats: usize) {
+        let wheel_rows = 3usize.saturating_mul(repeats);
+        let wheel_columns = 4usize.saturating_mul(repeats);
         use event::{MouseButton, MouseEventKind as Kind};
         let point = ratatui::layout::Position::new(event.column, event.row);
         let action = self
@@ -1061,7 +1108,7 @@ impl App {
             if event.kind == Kind::Down(MouseButton::Left) {
                 match action {
                     Some(MouseAction::Accept) => {
-                        if matches!(self.prompt, Some(Prompt::Quit)) {
+                        if matches!(self.prompt, Some(Prompt::Quit | Prompt::CloseTab(_))) {
                             self.input = "discard".into();
                         }
                         self.key(KeyEvent::new(K::Enter, M::NONE));
@@ -1082,9 +1129,9 @@ impl App {
                 return;
             }
             match event.kind {
-                Kind::ScrollUp => self.palette = Some(selected.saturating_sub(3)),
+                Kind::ScrollUp => self.palette = Some(selected.saturating_sub(wheel_rows)),
                 Kind::ScrollDown => {
-                    self.palette = Some((selected + 3).min(self.menu_commands().len() - 1))
+                    self.palette = Some((selected + wheel_rows).min(self.menu_commands().len() - 1))
                 }
                 Kind::Moved => {
                     if let Some(MouseAction::Command(i)) = action {
@@ -1100,6 +1147,9 @@ impl App {
                 }
                 _ => {}
             }
+            return;
+        }
+        if self.db_mouse(event, action, repeats) {
             return;
         }
         if event.kind == Kind::Down(MouseButton::Right)
@@ -1186,18 +1236,18 @@ impl App {
         {
             self.explorer = true;
             self.selected = if event.kind == Kind::ScrollUp {
-                self.selected.saturating_sub(3)
+                self.selected.saturating_sub(wheel_rows)
             } else {
-                (self.selected + 3).min(self.entries.len().saturating_sub(1))
+                (self.selected + wheel_rows).min(self.entries.len().saturating_sub(1))
             };
             return;
         }
         if self.preview_area.contains(point) {
             if matches!(event.kind, Kind::ScrollLeft | Kind::ScrollRight) {
                 self.preview_left = if event.kind == Kind::ScrollLeft {
-                    self.preview_left.saturating_sub(4)
+                    self.preview_left.saturating_sub(wheel_columns)
                 } else {
-                    self.preview_left.saturating_add(4)
+                    self.preview_left.saturating_add(wheel_columns)
                 };
                 return;
             }
@@ -1208,14 +1258,14 @@ impl App {
             }
             if matches!(event.kind, Kind::ScrollUp | Kind::ScrollDown) {
                 self.scroll = if event.kind == Kind::ScrollUp {
-                    self.scroll.saturating_sub(3)
+                    self.scroll.saturating_sub(wheel_rows)
                 } else {
-                    self.scroll.saturating_add(3)
+                    self.scroll.saturating_add(wheel_rows)
                 };
                 return;
             }
         }
-        if self.view == View::Editor
+        if matches!(self.view, View::Editor | View::Database)
             && self.editor_area.contains(point)
             && matches!(
                 event.kind,
@@ -1248,23 +1298,28 @@ impl App {
             let up = event.kind == Kind::ScrollUp;
             if self.content_area.contains(point) {
                 match self.view {
-                    View::Editor => {
-                        self.tabs[self.tab].scroll_rows(!up, 3, self.editor_area.width as usize);
+                    View::Editor | View::Database => {
+                        self.tabs[self.tab].scroll_rows(
+                            !up,
+                            wheel_rows,
+                            self.editor_area.width as usize,
+                        );
                         self.follow_caret = false;
                     }
                     View::Preview | View::Git | View::Help => {
                         self.scroll = if up {
-                            self.scroll.saturating_sub(3)
+                            self.scroll.saturating_sub(wheel_rows)
                         } else {
-                            self.scroll.saturating_add(3)
+                            self.scroll.saturating_add(wheel_rows)
                         };
                     }
                     View::Diff => {
                         if let Some(diff) = &mut self.comparison {
                             diff.top = if up {
-                                diff.top.saturating_sub(3)
+                                diff.top.saturating_sub(wheel_rows as u64)
                             } else {
-                                (diff.top + 3).min(diff.index.rows.saturating_sub(1))
+                                (diff.top + wheel_rows as u64)
+                                    .min(diff.index.rows.saturating_sub(1))
                             };
                         }
                     }
@@ -1272,9 +1327,9 @@ impl App {
                         let tab = &mut self.tabs[self.tab];
                         if let Some(shell) = &tab.terminal {
                             tab.term_back = if up {
-                                (tab.term_back + 3).min(shell.screen.history_len())
+                                (tab.term_back + wheel_rows).min(shell.screen.history_len())
                             } else {
-                                tab.term_back.saturating_sub(3)
+                                tab.term_back.saturating_sub(wheel_rows)
                             };
                         }
                     }
@@ -1285,13 +1340,13 @@ impl App {
             if self.view == View::Sheet {
                 if let Some(book) = &mut self.tabs[self.tab].book {
                     if up {
-                        book.row = book.row.saturating_sub(3);
+                        book.row = book.row.saturating_sub(wheel_rows as u64);
                     } else {
-                        book.row = book.row.saturating_add(3);
+                        book.row = book.row.saturating_add(wheel_rows as u64);
                     }
                 }
             } else if self.view == View::Table {
-                for _ in 0..3 {
+                for _ in 0..wheel_rows {
                     self.table_key(KeyEvent::new(if up { K::Up } else { K::Down }, M::NONE));
                 }
             }
@@ -1488,6 +1543,9 @@ impl App {
         self.input.clear();
     }
     fn command(&mut self, name: &str) {
+        if self.db_command(name) {
+            return;
+        }
         if self.tabs[self.tab].terminal.is_some()
             && matches!(
                 name,
@@ -1634,7 +1692,7 @@ impl App {
                     return;
                 }
                 if self.tabs[self.tab].modified() {
-                    self.status = "Save this document before closing its tab".into();
+                    self.ask(Prompt::CloseTab(self.tab));
                     return;
                 }
                 self.tabs.remove(self.tab);
@@ -1756,6 +1814,7 @@ impl App {
     fn submit(&mut self, prompt: Prompt) {
         let input = std::mem::take(&mut self.input);
         match prompt {
+            Prompt::Database(kind) => self.db_submit(kind, input),
             Prompt::LayoutOpen => {
                 if self.busy {
                     return;
@@ -1978,6 +2037,21 @@ impl App {
             Prompt::Quit => {
                 self.quit = input == "discard";
             }
+            Prompt::CloseTab(tab) => {
+                if input == "discard"
+                    && !self.busy
+                    && self.pending_saves.is_empty()
+                    && tab < self.tabs.len()
+                {
+                    self.tabs.remove(tab);
+                    if self.tabs.is_empty() {
+                        self.tabs.push(Editor::empty());
+                    }
+                    self.last_document = self.last_document.min(self.tabs.len() - 1);
+                    self.select_tab(tab.min(self.tabs.len() - 1));
+                    self.status = "Changes discarded; tab closed".into();
+                }
+            }
             Prompt::Find => {
                 if input.is_empty() {
                     return;
@@ -2047,6 +2121,9 @@ impl App {
                 K::Enter => self.run_menu(selected),
                 _ => {}
             }
+            return;
+        }
+        if self.db_key(key) {
             return;
         }
         match key.code {
@@ -2294,7 +2371,7 @@ impl App {
             }
             return;
         }
-        if self.view != View::Editor {
+        if !matches!(self.view, View::Editor | View::Database) {
             match key.code {
                 K::Up => self.scroll = self.scroll.saturating_sub(1),
                 K::Down => self.scroll = self.scroll.saturating_add(1),
@@ -2473,6 +2550,7 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
     // Initial explorer loading completes before opening the command-line file.
     let mut initial = initial;
     let mut dirty = true;
+    let mut inputs = yyterminal_editor::input::Queue::default();
     while !app.quit {
         dirty |= app.poll();
         if !app.busy
@@ -2485,10 +2563,21 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
             terminal.draw(|f| draw(f, &mut app))?;
             dirty = false;
         }
-        if event::poll(Duration::from_millis(30))? {
+        if let Some((input, repeats)) = inputs.read(Duration::from_millis(8))? {
+            if matches!(&input, Event::Mouse(m) if m.kind == event::MouseEventKind::Moved)
+                && app.palette.is_none()
+            {
+                continue;
+            }
             dirty = true;
-            match event::read()? {
-                Event::Mouse(mouse) => app.mouse(mouse),
+            match input {
+                Event::Mouse(mouse) => {
+                    if repeats == 1 {
+                        app.mouse(mouse);
+                    } else {
+                        app.mouse_repeated(mouse, repeats);
+                    }
+                }
                 Event::Key(key) => app.key(key),
                 Event::Paste(text) => {
                     if app.palette.is_some() {
@@ -2509,7 +2598,10 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                         {
                             app.status = error.to_string();
                         }
-                    } else if app.view == View::Editor && !app.explorer && !app.preview_focus {
+                    } else if matches!(app.view, View::Editor | View::Database)
+                        && !app.explorer
+                        && !app.preview_focus
+                    {
                         app.preview_focus = false;
                         app.follow_caret = true;
                         app.tabs[app.tab].doc.paste(&text);
@@ -2529,6 +2621,14 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    let open_plan = args
+        .iter()
+        .position(|a| a == "--open-plan")
+        .map(|i| {
+            args.remove(i);
+            true
+        })
+        .unwrap_or(false);
     let mut encoding = None;
     if let Some(index) = args.iter().position(|a| a == "--encoding") {
         anyhow::ensure!(index + 1 < args.len(), "--encoding requires a name");
@@ -2540,7 +2640,7 @@ fn main() -> Result<()> {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "yyte [--encoding NAME] [FILE|DIRECTORY|WORKSPACE.yyworkspace]\nyyte --help | --version\n\n{HELP}"
+            "yyte [--encoding NAME] [FILE|DIRECTORY|WORKSPACE.yyworkspace]\nyyte --open-plan PLAN_FILE\nyyte --help | --version\n\n{HELP}"
         );
         return Ok(());
     }
@@ -2565,7 +2665,17 @@ fn main() -> Result<()> {
     let mut app = App::new(root);
     app.load_preferences();
     app.encoding = encoding;
-    run(app, initial)
+    if open_plan {
+        let path = initial.context("--open-plan requires a plan file")?;
+        app.command("DB Manager");
+        app.db
+            .as_mut()
+            .unwrap()
+            .send(yyterminal_editor::database::Request::LoadPlan(path));
+        run(app, None)
+    } else {
+        run(app, initial)
+    }
 }
 
 #[cfg(test)]
@@ -3382,4 +3492,30 @@ mod tests {
         assert!(!app.quit);
         Ok(())
     }
+    #[test]
+    fn modified_tab_requires_explicit_discard_and_keeps_other_documents() -> Result<()> {
+        let mut app = App::new(std::env::current_dir()?);
+        app.busy = false;
+        app.tabs[0].doc.insert_text("keep", false);
+        app.command("New file");
+        app.tabs[app.tab].doc.insert_text("discard", false);
+        let tab = app.tab;
+        app.command("Close tab");
+        assert!(matches!(app.prompt,Some(Prompt::CloseTab(i)) if i==tab));
+        app.input = "cancel".into();
+        app.submit(Prompt::CloseTab(tab));
+        assert_eq!(app.tabs.len(), 2);
+        app.input = "discard".into();
+        app.submit(Prompt::CloseTab(tab));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].doc.snapshot().read(0..4), b"keep");
+        app.input = "discard".into();
+        app.submit(Prompt::CloseTab(0));
+        assert_eq!(app.tabs.len(), 1);
+        assert!(!app.tabs[0].modified());
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+mod render_bench;

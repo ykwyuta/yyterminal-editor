@@ -1,0 +1,36 @@
+┌Plan · right → left · Tab next operator · arrows pan───────────────────────────────────────────────────────────────────┐┌Operator properties · PgUp/PgDn──────────────────────────┐
+│Query 1 · PostgreSQL · Actual (cost is estimated)                                                                      ││表示対象: Sort                                           │
+│                                                                                                                       ││Node ID: 1                                               │
+│┌──────────────────────────────┐            ┌──────────────────────────────┐            ┌──────────────────────────────││Physical Operation: Sort                                 │
+││[↕] #1                        │       156  │[Σ] #2                        │       1200 │[⋈] #3                        ││処理内容: Sort                                           │
+││Sort                          │◀───────────│Aggregate                     │◀━━━━━━━━━━━│Hash Join                     ││統計の意味:                                              │
+││推定コスト: 217.35            │            │推定コスト: 152.98            │            │推定コスト: 113.98            ││コストは相対単位（子の処理を含む）。実測行数・時間はルー │
+││2.398 ms / loop               │            │2.239 ms / loop               │            │1.408 ms / loop               ││プ平均、BUFFERSは子の処理を含みます                      │
+││行数 156 / 推定 1200 / loop   │            │行数 156 / 推定 1200 / loop   │            │行数 1200 / 推定 1200 / loop  ││Estimated Number of Rows: 1200                           │
+││                              │            │                              │            │                              ││Actual Number of Rows: 156                               │
+││                              │            │                              │            │                              ││Actual Loops: 1                                          │
+││                              │            │                              │            │                              ││Actual Rows (all executions): 156                        │
+││                              │            │                              │            │                              ││行数・時間の基準: Actual Rows / Actual Total Time        │
+│└──────────────────────────────┘            └──────────────────────────────┘            └──────────────────────────────││は1ループ平均。全実行行数は行数×loops。時間の合計は壁時計│
+│                                                                                                                       ││時間ではありません                                       │
+│                                                                                                                       ││行数推定の乖離（大きい側／小さい側）: 7.7倍（1実行あたり）
+│                                                                                                                       ││Actual Total Time (per loop, inclusive, ms): 2.398       │
+│                                                                                                                       ││Native Estimated Cost: 217.35                            │
+│                                                                                                                       ││Sort Key: ["(sum(((i.quantity)::numeric * i.unit_price)))│
+│                                                                                                                       ││DESC","c.customer_code","p.name"]                        │
+│                                                                                                                       ││Output:                                                  │
+│                                                                                                                       ││["c.customer_code","c.name","e.name","p.name","(count(*))│
+│                                                                                                                       ││","(sum(((i.quantity)::numeric * i.unit_price)))"]       │
+│                                                                                                                       ││Sort Method: quicksort                                   │
+│                                                                                                                       ││Sort Space Used: 39                                      │
+│                                                                                                                       ││Sort Space Type: Memory                                  │
+│                                                                                                                       ││Shared Hit Blocks: 38                                    │
+│                                                                                                                       ││Shared Read Blocks: 0                                    │
+│                                                                                                                       ││Temp Read Blocks: 0                                      │
+│                                                                                                                       ││Temp Written Blocks: 0                                   │
+│                                                                                                                       ││Query.Execution Time: 2.607                              │
+│                                                                                                                       ││Query.Planning Time: 0.72                                │
+│                                                                                                                       ││Actual Rows: 156                                         │
+│                                                                                                                       ││Actual Startup Time: 2.39                                │
+│                                                                                                                       ││Actual Total Time: 2.398                                 │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────┘

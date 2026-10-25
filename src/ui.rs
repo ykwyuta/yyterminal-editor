@@ -54,16 +54,19 @@ pub(crate) fn entry_lines(app: &App, index: usize, width: u16) -> Vec<String> {
         prefix
     };
     let continuation = " ".repeat(prefix.width());
+    let mut used = prefix.width();
     let mut line = prefix;
     let mut result = Vec::new();
     for ch in name.chars() {
         let ch = if ch.is_control() { '�' } else { ch };
         let size = ch.width().unwrap_or(0);
-        if line.width() + size > width as usize && line.width() > continuation.len() {
+        if used + size > width as usize && used > continuation.len() {
             result.push(line);
             line = continuation.clone();
+            used = continuation.len();
         }
         line.push(ch);
+        used += size;
     }
     result.push(line);
     result
@@ -188,6 +191,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         View::Diff => "yymerge comparison",
         View::Preview => "Markdown preview",
         View::Help => "Help",
+        View::Database => "Database",
     };
     let border = block(title, !app.explorer);
     let inner = border.inner(right);
@@ -195,6 +199,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(border, right);
     if inner.width > 0 && inner.height > 0 {
         match app.view {
+            View::Database => crate::db_app::draw(frame, app, inner),
             View::Diff => draw_diff(frame, app, inner),
             View::Sheet => draw_book(frame, app, inner),
             View::Table => draw_grid(frame, app, inner),
@@ -249,9 +254,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                             if cell.attr.has(yy_term::screen::flags::INVERSE) {
                                 style = style.add_modifier(Modifier::REVERSED);
                             }
-                            frame.buffer_mut()[(inner.x + x as u16, inner.y + y)]
-                                .set_symbol(&cell.text())
-                                .set_style(style);
+                            let target = &mut frame.buffer_mut()[(inner.x + x as u16, inner.y + y)];
+                            if cell.combining.is_none() {
+                                target.set_char(cell.ch);
+                            } else {
+                                target.set_symbol(&cell.text());
+                            }
+                            target.set_style(style);
                         }
                     }
                     if !app.explorer && tab.term_back == 0 && shell.screen.modes().cursor_visible {
@@ -360,6 +369,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             }
         } else {
             let title = match app.prompt {
+                Some(Prompt::Database(kind)) => kind.title(),
                 Some(Prompt::Open) => "Open path",
                 Some(Prompt::Save) => "Save as path (new file)",
                 Some(Prompt::Find) => "Find next text (16 MiB)",
@@ -388,6 +398,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                     "Syntax: auto / none / rust / sql / python / markdown / ..."
                 }
                 Some(Prompt::Encoding) => "Next open: auto, CP932, IBM-930/fixed:80, ...",
+                Some(Prompt::CloseTab(_)) => "Discard all unsaved changes and close this tab?",
                 _ => "Unsaved changes: type discard to quit",
             };
             let displayed = app
@@ -401,6 +412,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                     c => c,
                 })
                 .collect::<String>();
+            let displayed = if matches!(
+                app.prompt,
+                Some(Prompt::Database(crate::db_app::Input::Password))
+            ) {
+                "•".repeat(app.input.chars().count())
+            } else {
+                displayed
+            };
             frame.render_widget(
                 Paragraph::new(displayed.as_str()).block(block(title, true)),
                 rect,
@@ -410,7 +429,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 let mut x = area.x;
                 for (label, action) in [
                     (
-                        if matches!(app.prompt, Some(Prompt::Quit)) {
+                        if matches!(app.prompt, Some(Prompt::Quit | Prompt::CloseTab(_))) {
                             "[Discard]"
                         } else {
                             "[OK]"
@@ -856,7 +875,16 @@ fn draw_diff(frame: &mut Frame, app: &mut App, area: Rect) {
             _ => Color::Reset,
         };
         Line::styled(
-            format!("{prefix}{}", diff.text(row, is_left)),
+            format!(
+                "{prefix}{}",
+                diff.preview(
+                    row,
+                    is_left,
+                    u64::from(if is_left { left.width } else { right.width })
+                        .saturating_mul(4)
+                        .saturating_add(16)
+                )
+            ),
             Style::default().fg(color),
         )
     };
@@ -870,7 +898,7 @@ fn draw_diff(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+pub(crate) fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let e = &mut app.tabs[app.tab];
     let at = e.caret();
     let mut rows = e.rows(area.height as usize, area.width as usize);
@@ -930,15 +958,12 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 .saturating_sub(usize::from(area.width)),
         );
     }
-    frame.render_widget(
-        Paragraph::new(if app.preview_pending {
-            vec![Line::raw("Rendering Markdown...")]
-        } else {
-            app.preview
-                .viewport(app.scroll, app.preview_left, area.width, area.height)
-        }),
-        area,
-    );
+    if app.preview_pending {
+        frame.render_widget(Paragraph::new("Rendering Markdown..."), area);
+    } else {
+        app.preview_raster
+            .paint(frame, area, &app.preview, app.scroll, app.preview_left);
+    }
 }
 fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.height == 0 || area.width == 0 {
@@ -951,7 +976,9 @@ fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, e)| {
-            let name = if e.terminal.is_some() {
+            let name = if e.database {
+                format!("SQL {}", i + 1)
+            } else if e.terminal.is_some() {
                 format!("Terminal {}", i + 1)
             } else {
                 e.path

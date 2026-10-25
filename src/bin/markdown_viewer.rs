@@ -70,6 +70,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     crossterm::execute!(std::io::stdout(), event::EnableMouseCapture)?;
     let (tx, rx) = std::sync::mpsc::channel();
     let mut rendered = Rendered::default();
+    let mut raster = yyterminal_editor::render_cache::RasterViewport::default();
     let mut pending = false;
     let mut last_width = 0;
     let mut scroll = 0usize;
@@ -77,6 +78,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     let mut error = String::new();
     let mut dirty = true;
     let mut mouse_actions = vec![];
+    let mut inputs = yyterminal_editor::input::Queue::default();
     loop {
         let width = terminal.size()?.width.clamp(1, preview::MAX_WIDTH);
         if width != last_width && !pending {
@@ -92,6 +94,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
         }
         if let Ok(value) = rx.try_recv() {
             rendered = value;
+            raster.clear();
             pending = false;
             dirty = true;
             error.clear();
@@ -130,10 +133,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
                         x += w + 1;
                     }
                 }
-                f.render_widget(
-                    Paragraph::new(rendered.viewport(scroll, left, body.width, body.height)),
-                    body,
-                );
+                raster.paint(f, body, &rendered, scroll, left);
                 f.render_widget(
                     Paragraph::new(format!(
                         "markdownViewer | {} cols | {}{} | q: quit | arrows/PgUp/PgDn",
@@ -146,24 +146,26 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
             })?;
             dirty = false;
         }
-        if event::poll(Duration::from_millis(30))? {
+        if let Some((input, repeats)) = inputs.read(Duration::from_millis(8))? {
             dirty = true;
-            let input = match event::read()? {
+            let rows = 3usize.saturating_mul(repeats);
+            let columns = 4usize.saturating_mul(repeats);
+            let input = match input {
                 Event::Mouse(mouse) => match mouse.kind {
                     event::MouseEventKind::ScrollUp => {
-                        scroll = scroll.saturating_sub(3);
+                        scroll = scroll.saturating_sub(rows);
                         None
                     }
                     event::MouseEventKind::ScrollDown => {
-                        scroll = scroll.saturating_add(3);
+                        scroll = scroll.saturating_add(rows);
                         None
                     }
                     event::MouseEventKind::ScrollLeft => {
-                        left = left.saturating_sub(4);
+                        left = left.saturating_sub(columns);
                         None
                     }
                     event::MouseEventKind::ScrollRight => {
-                        left = left.saturating_add(4);
+                        left = left.saturating_add(columns);
                         None
                     }
                     event::MouseEventKind::Down(event::MouseButton::Left) => mouse_actions

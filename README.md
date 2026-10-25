@@ -18,6 +18,7 @@ Rust 1.99.0、UTF-8端末、Git、シェルが必要です。上部メニュー�
 
 - [CSV・固定長編集の動作デモ](demo/README.md)
 - [単独Markdownビューアー・画像・Mermaid](docs/user/markdown-viewer.md) — `markdownViewer FILE.md`
+- [データベース管理・SQL・実行計画・検索結果・ER](docs/user/database.md) — YYdbmanagerの共有エンジンを使用
 - [利用者向け操作説明](docs/user/help.md) — 同梱ヘルプの原稿
 - [ビルド・内部構成・検証](docs/developer/README.md)
 - [企画案](docs/proposal/2026-10-25-yyterminal-editor.md)
@@ -32,3 +33,7 @@ Markdownプレビューは128MiB・100万表示行へ対応し、表を行番号
 エディタとMarkdownプレビューのコードブロックは、yyeditorと共通の38種類のシンタックス定義で色分けします。エディタは自動判定し、`表示 > シンタックスの言語` から言語指定や無効化もできます。Markdown原稿のコードフェンス内も指定言語で表示します。対応言語と巨大ファイルでの解析範囲は[ヘルプ](docs/user/help.md)を参照してください。
 
 リリースビルドはWindows／Linuxのx86_64版とARM64版を用意します。CPUに合う `x86_64` または `arm64` の配布物を選んでください。Markdownプレビューは見出しレベル別の枠・下線、ブロック間の空行、階層別リスト記号・番号・チェックボックス、折り返しの字下げで読みやすく表示します。
+
+データベースメニューからSQLite・DuckDB・PostgreSQL・MySQL・SQL Server・Oracle・Db2を利用できます。結果は行番号・列見出し・罫線・選択・コピー・ページ取得を持つ閲覧専用グリッド、実行計画は元のノード配置・コスト・警告を用いた端末用の図として表示します。LinuxではunixODBCとOpenSSL 3が必要です。詳しくは[データベース機能のヘルプ](docs/user/database.md)を参照してください。
+
+- [実DBから取得した実行計画画面の出力例](docs/user/database-plan-examples.md)

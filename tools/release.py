@@ -69,7 +69,7 @@ def verify_native(args):
     viewer = directory / ("markdownViewer" + extension)
     demo = str(ROOT / "demo/markdown-preview.md")
     plain = run_binary(viewer, "--plain", demo)
-    for marker in (b"40x28", b"Connections:", "╞".encode(), "║ Terminal Markdown preview ║\n╚".encode()):
+    for marker in (b"40x28", b"Connections:", "╞".encode(), "║ Terminal Markdown preview".encode()):
         if marker not in plain:
             raise ValueError(f"Missing preview marker {marker!r}")
     if b"\x1b" in plain:

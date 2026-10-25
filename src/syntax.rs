@@ -280,15 +280,15 @@ impl EditorHighlighter {
     pub fn name(&self) -> Option<&str> {
         self.ready.as_ref().and_then(|r| r.syntax.as_deref())
     }
-    pub fn lines(
+    pub fn lines<'a>(
         &mut self,
         snapshot: &yy_buffer::Snapshot,
         version: yy_core::Version,
         path: Option<&Path>,
         manual: Option<&str>,
-        rows: &[(u64, u64, String)],
+        rows: &'a [(u64, u64, String)],
         selection: Range<u64>,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<Line<'a>> {
         let key = Key {
             version,
             path: path.map(Path::to_owned),
@@ -296,25 +296,35 @@ impl EditorHighlighter {
             start: rows.first().map_or(0, |r| r.0),
             end: rows.last().map_or(0, |r| r.1),
         };
-        let current = self.ready.as_ref().is_some_and(|ready| ready.key == key);
+        let matches_document = |ready: &Highlighted| {
+            ready.key.version == key.version
+                && ready.key.path == key.path
+                && ready.key.language == key.language
+        };
+        let current = self.ready.as_ref().is_some_and(|ready| {
+            matches_document(ready) && ready.key.start <= key.start && ready.key.end >= key.end
+        });
         if !current && !self.pending {
             self.pending = true;
-            let seed =
-                self.ready
-                    .as_ref()
-                    .filter(|ready| {
-                        ready.key.version == key.version
-                            && ready.key.path == key.path
-                            && ready.key.language == key.language
+            let mut request = key.clone();
+            request.start = request.start.saturating_sub(32 * 1024);
+            request.end = request
+                .end
+                .saturating_add(64 * 1024)
+                .min(request.start.saturating_add(VIEW_BYTES))
+                .min(snapshot.len());
+            let seed = self
+                .ready
+                .as_ref()
+                .filter(|ready| matches_document(ready))
+                .and_then(|ready| {
+                    ready.checkpoints.iter().rev().find(|p| {
+                        p.offset <= request.start && request.start - p.offset <= CONTEXT_BYTES
                     })
-                    .and_then(|ready| {
-                        ready.checkpoints.iter().rev().find(|p| {
-                            p.offset <= key.start && key.start - p.offset <= CONTEXT_BYTES
-                        })
-                    })
-                    .cloned();
+                })
+                .cloned();
             let snapshot = snapshot.clone();
-            let key = key.clone();
+            let key = request;
             let tx = self.tx.clone();
             std::thread::spawn(move || {
                 let _ = tx.send(highlight_window(snapshot, key, seed));
@@ -323,8 +333,11 @@ impl EditorHighlighter {
         let tokens = self
             .ready
             .as_ref()
-            .filter(|ready| ready.key == key)
+            .filter(|ready| matches_document(ready))
             .map_or(&[][..], |ready| ready.tokens.as_slice());
+        if tokens.is_empty() && selection.is_empty() {
+            return rows.iter().map(|r| Line::raw(r.2.as_str())).collect();
+        }
         rows.iter()
             .map(|(start, end, _)| {
                 let first = tokens.partition_point(|t| t.range.end <= *start);
@@ -419,6 +432,42 @@ mod tests {
         line.spans
             .iter()
             .any(|span| span.content.contains(text) && span.style.fg == token_style(token).fg)
+    }
+    #[test]
+    fn nearby_scroll_reuses_tokens_without_plain_text_flash_or_worker_restart() {
+        let source = "let value = 42; // note\n".repeat(2000);
+        let doc = yy_core::Document::from_text(&source);
+        let mut h = EditorHighlighter::default();
+        let row = |at: usize| vec![(at as u64, (at + 23) as u64, source[at..at + 23].to_owned())];
+        h.lines(
+            doc.snapshot(),
+            doc.version(),
+            None,
+            Some("rust"),
+            &row(0),
+            0..0,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !h.poll() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for at in [23, 46, 230, 0] {
+            let rows = row(at);
+            let lines = h.lines(
+                doc.snapshot(),
+                doc.version(),
+                None,
+                Some("rust"),
+                &rows,
+                0..0,
+            );
+            assert!(has(&lines[0], "let", "keyword"));
+            assert!(
+                !h.pending,
+                "Scrolling inside cached coverage spawned a worker"
+            );
+        }
     }
     #[test]
     fn builtin_detection_aliases_and_distinct_token_colors() {

@@ -1,6 +1,6 @@
 [package]
 name = "yyterminal-editor"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
@@ -41,3 +41,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 yy-syntax = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+
+yy-db-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+yy-draw = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }

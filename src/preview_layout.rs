@@ -78,7 +78,7 @@ pub(crate) fn clip(line: &Line<'_>, left: usize, width: usize) -> Line<'static> 
         }
         position = end;
     }
-    Line::from(spans)
+    Line::from(spans).style(line.style)
 }
 
 #[cfg(test)]

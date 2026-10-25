@@ -24,7 +24,7 @@ fn standalone_plain_color_and_stdin_share_rendering() -> Result<()> {
         "検証",
         "Open Markdown",
         "customer_id FK",
-        "║ Terminal Markdown preview ║",
+        "║ Terminal Markdown preview",
         "9. Numbering can start at nine.",
         "◦ A nested bullet",
         "▪ A deeper bullet",
@@ -35,6 +35,8 @@ fn standalone_plain_color_and_stdin_share_rendering() -> Result<()> {
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
+    let border = text.lines().find(|line| line.starts_with('╔')).unwrap();
+    assert_eq!(border.chars().count(), 80);
     assert!(!text.contains('\u{1b}'));
     let output = Command::new(exe)
         .args(["--print", "--color"])

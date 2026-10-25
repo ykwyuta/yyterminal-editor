@@ -10,7 +10,7 @@ F6           Switch explorer/editor focus
 Ctrl+O / P   Open a file by path
 Ctrl+N       New document
 Ctrl+Tab     Next document
-Ctrl+W       Close saved document
+Ctrl+W       Close document (modified: Discard / Cancel)
 Ctrl+C/X/V   Internal clipboard (up to 1 MiB; not the system clipboard)
 Ctrl+S       Save (asks for a path on a new document)
 Ctrl+F       Find next literal text (next 16 MiB)
@@ -487,3 +487,8 @@ Ordered lists keep their starting number. Nested bullets cycle through
 Tasks show green [x] or yellow [ ]. Bold, italic, strikethrough, underlined
 links and colored inline code distinguish important text. Shapes remain
 visible in --plain output; source files are never modified by decoration.
+
+Closing a modified document opens a confirmation. Click Discard to remove
+all unsaved changes and close only that tab; Cancel or Esc keeps it open.
+The original file is not overwritten. Closing the last document creates a
+new empty document. The tab close button and File > Close tab behave the same.
