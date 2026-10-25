@@ -465,3 +465,13 @@ The shared engine colors up to 64 KiB per logical line; a longer tail stays
 plain. These analysis limits do not truncate the editable document or saved
 bytes. Preview code blocks preserve state from their beginning, with the
 same per-logical-line analysis limit.
+
+
+Markdown block spacing / ブロック間の余白
+-----------------------------------------
+Headings, paragraphs, lists, tables and code blocks are separated by one
+blank display line. Tight list items stay consecutive; loose lists keep
+paragraph separation. Nested list lines and blank lines inside code are
+preserved. Separators are deferred until the next block, avoiding extra
+leading/trailing blank rows or doubled block margins. This affects previews
+and markdownViewer output only, and never modifies the Markdown source.

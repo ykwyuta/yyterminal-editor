@@ -116,3 +116,19 @@ yyteのプレビューは文書版・タブ・表示幅・ネットワーク設�
 トークンのバイト範囲を表示行へ交差させ、選択範囲の背景だけを重ねる。タブ展開・CRLF・日本語・不正バイトの代替表示を従来の位置対応と一致させ、UTF-8途中の解析上限で文字を欠落させない。ハイライトは文書への編集・保存処理を行わない。
 
 CIの過去の失敗原因と対策は[CI失敗分析](../history/ci-failure-analysis.md)を参照してください。
+
+
+## リリースのアーキテクチャ
+
+配布ツールはPython 3.11以上を使い、CIはPython 3.13を明示する。CIはLinux／Windowsのx86_64とARM64の4環境で、fmt・Clippy・テスト・releaseビルドと `tools/release.py verify` を実行する。ARM64はそれぞれ `ubuntu-24.04-arm` と `windows-11-arm` 上でネイティブ実行する。Rustホストはmatrixの完全ターゲット名で固定し、x64エミュレーションでビルドした資材をARM版として扱わない。実行ファイルのPE/ELF機械種別、バージョン、ヘルプ、Markdownの余白・表・画像・構文色も確認する。各CIの資材名にはOSと `X64`／`ARM64` を含める。
+
+GitHub上で対象SHAの4ジョブが成功した後、配布資材を取得して全アーキテクチャをまとめる。
+
+```sh
+gh run download RUN_ID --repo ykwyuta/yyterminal-editor --dir target/distribution/artifacts
+python tools/release.py package --artifacts target/distribution/artifacts --output target/distribution/packages --version v0.5 --commit FULL_COMMIT_SHA --ci-run https://github.com/ykwyuta/yyterminal-editor/actions/runs/RUN_ID
+```
+
+WindowsはZIP、Linuxは実行権限付きtar.gz。ファイル名の `x86_64`／`arm64` がCPUを示す。4種類すべてを必須とし、実行形式の機械種別が一致しない場合や既存のステージがある場合は失敗させる。ヘルプ・デモ・README・ライセンスは指定コミットから取得する。BUILDINFO.jsonにソースSHA・CI・ターゲット・バイナリSHA-256を記録し、SHA256SUMS.txtを出力する。ARM資材をx86ホストで実行したとは表現せず、CIのネイティブ検証結果を使う。
+
+ランナーの対応は[GitHub公式仕様](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)を参照。Markdownのブロック間余白は `Output` の遅延した区切りとして処理し、段落・見出し・リスト・表・コードの境界で1行だけ確保する。区切りも描画行数予算に含む。

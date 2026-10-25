@@ -811,3 +811,93 @@ fn editor_and_markdown_preview_highlight_languages_and_allow_manual_override() -
     }
     Ok(())
 }
+
+#[test]
+fn preview_block_spacing_is_visible_in_editor_and_standalone_viewer() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("spacing.md");
+    let source = "# READABLE_TITLE\n\nFIRST_PARAGRAPH\n\n- LIST_ONE\n- LIST_TWO\n\nAFTER_LIST\n\nLAST_PARAGRAPH\n";
+    std::fs::write(&path, source)?;
+    let spaced = |screen: &yy_term::Terminal| {
+        let rows = (0..screen.rows())
+            .map(|y| screen.screen_row(y).text())
+            .collect::<Vec<_>>();
+        let find = |text: &str| rows.iter().position(|row| row.contains(text));
+        let Some(title) = find("READABLE_TITLE") else {
+            return false;
+        };
+        let at = rows[title].find("READABLE_TITLE").unwrap();
+        let left = unicode_width::UnicodeWidthStr::width(&rows[title][..at]);
+        // Inspect the preview's columns, not the independent Explorer beside it.
+        let blank = |row: usize| {
+            if row >= screen.rows() {
+                return false;
+            }
+            screen
+                .screen_row(row)
+                .cells
+                .iter()
+                .skip(left)
+                .map(|cell| cell.text())
+                .collect::<String>()
+                .trim_matches(['│', ' '])
+                .is_empty()
+        };
+        let Some(first) = find("FIRST_PARAGRAPH") else {
+            return false;
+        };
+        let Some(one) = find("* LIST_ONE") else {
+            return false;
+        };
+        let Some(two) = find("* LIST_TWO") else {
+            return false;
+        };
+        let Some(after) = find("AFTER_LIST") else {
+            return false;
+        };
+        let Some(last) = find("LAST_PARAGRAPH") else {
+            return false;
+        };
+        first == title + 2
+            && one == first + 2
+            && two == one + 1
+            && after == two + 2
+            && last == after + 2
+            && [title, first, two, after].iter().all(|row| blank(row + 1))
+    };
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.send(b"\x1b[15~")?;
+    app.wait("Markdown preview ready")?;
+    app.wait_for("readable preview block spacing", spaced)?;
+    app.finish()?;
+    let mut viewer = Harness::with_exe(&path, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    viewer.wait("Ready")?;
+    viewer.wait_for("standalone block spacing", spaced)?;
+    viewer.click_text("[Close]")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = viewer.child.try_wait()? {
+            ensure!(status.success(), "Viewer exit failed");
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Viewer did not exit: {}",
+            viewer.screen.screen_text()
+        );
+        if let Ok(bytes) = viewer
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            viewer.screen.feed(&bytes);
+        }
+    }
+    ensure!(
+        std::fs::read_to_string(&path)? == source,
+        "Preview changed Markdown source"
+    );
+    Ok(())
+}

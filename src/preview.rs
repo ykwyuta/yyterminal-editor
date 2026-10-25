@@ -61,6 +61,7 @@ pub(crate) struct Output {
     pub(crate) width: usize,
     limit: usize,
     clipped: bool,
+    block_gap: bool,
 }
 impl Output {
     fn new(width: u16, limit: usize) -> Self {
@@ -69,6 +70,7 @@ impl Output {
             width: usize::from(width).max(1),
             limit,
             clipped: false,
+            block_gap: false,
         }
     }
     pub(crate) fn full(&self) -> bool {
@@ -77,12 +79,34 @@ impl Output {
     pub(crate) fn remaining(&self) -> usize {
         self.limit.saturating_sub(self.lines.len())
     }
+    // Defer separators until another block is rendered: no leading/trailing
+    // blank rows, and nested lists or adjacent block boundaries cannot double them.
+    fn separate(&mut self) {
+        self.block_gap = !self.lines.is_empty();
+    }
+    fn before_content(&mut self) {
+        if std::mem::take(&mut self.block_gap)
+            && self.lines.last().is_some_and(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| !span.content.trim().is_empty())
+            })
+        {
+            if self.full() {
+                self.clipped = true;
+            } else {
+                self.lines.push(Line::default());
+            }
+        }
+    }
     fn push(&mut self, line: Line<'static>) {
+        self.before_content();
         let (wrapped, clipped) = crate::preview_layout::wrap(line, self.width, self.remaining());
         self.lines.extend(wrapped);
         self.clipped |= clipped;
     }
     pub(crate) fn grid(&mut self, line: Line<'static>) {
+        self.before_content();
         if self.full() {
             self.clipped = true;
         } else {
@@ -286,6 +310,7 @@ fn render_limited(
         if matches!(event, Event::End(TagEnd::Table)) {
             if let Some(table) = table.take() {
                 table.render(&mut lines);
+                lines.separate();
             }
             continue;
         }
@@ -298,12 +323,14 @@ fn render_limited(
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
+                lines.separate();
                 table = Some(crate::preview_table::Table::new(alignments));
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
+                lines.separate();
                 code = Some((
                     match kind {
                         CodeBlockKind::Fenced(lang) => lang.to_string(),
@@ -323,6 +350,7 @@ fn render_limited(
                         lines.extend(source.lines().map(|s| highlighter.line(s)));
                     }
                 }
+                lines.separate();
             }
             Event::Text(t) if code.is_some() => {
                 if let Some((_, s)) = &mut code {
@@ -362,9 +390,26 @@ fn render_limited(
                     lines.extend(result);
                 }
             }
-            Event::Start(Tag::Heading { .. }) => heading = true,
-            Event::Start(Tag::List(_)) => list_depth += 1,
-            Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
+            Event::Start(Tag::Paragraph) => lines.separate(),
+            Event::Start(Tag::Heading { .. }) => {
+                lines.separate();
+                heading = true;
+            }
+            Event::Start(Tag::List(_)) => {
+                if !spans.is_empty() {
+                    lines.push(Line::from(std::mem::take(&mut spans)));
+                }
+                if list_depth == 0 {
+                    lines.separate();
+                }
+                list_depth += 1;
+            }
+            Event::End(TagEnd::List(_)) => {
+                list_depth = list_depth.saturating_sub(1);
+                if list_depth == 0 {
+                    lines.separate();
+                }
+            }
             Event::Start(Tag::Item) => spans.push(Span::raw(format!(
                 "{}* ",
                 "  ".repeat(list_depth.saturating_sub(1).min(16))
@@ -385,13 +430,20 @@ fn render_limited(
             Event::SoftBreak | Event::HardBreak => {
                 lines.push(Line::from(std::mem::take(&mut spans)))
             }
-            Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
+            Event::End(end @ (TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item)) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
+                if matches!(end, TagEnd::Heading(_)) || end == TagEnd::Paragraph {
+                    lines.separate();
+                }
                 heading = false;
             }
-            Event::Rule => lines.push(Line::raw("-".repeat(usize::from(opts.width)))),
+            Event::Rule => {
+                lines.separate();
+                lines.push(Line::raw("-".repeat(usize::from(opts.width))));
+                lines.separate();
+            }
             Event::TaskListMarker(done) => {
                 spans.push(Span::raw(if done { "[x] " } else { "[ ] " }))
             }
@@ -655,6 +707,52 @@ mod tests {
             );
         }
         assert!(rendered.plain().contains("日本語"));
+    }
+    #[test]
+    fn block_spacing_separates_headings_paragraphs_and_lists_once() {
+        let source = "# Heading\n\nFirst paragraph.\n\n- one\n- two\n\nSecond paragraph.\n\nThird paragraph.\n\n## Next heading\n\nLast paragraph.\n";
+        let rendered = render(source, &Options::new(PathBuf::from("."), 80));
+        assert_eq!(
+            rendered.plain(),
+            "Heading\n\nFirst paragraph.\n\n* one\n* two\n\nSecond paragraph.\n\nThird paragraph.\n\nNext heading\n\nLast paragraph."
+        );
+        assert_eq!(
+            render("# One\n## Two\n", &Options::new(PathBuf::from("."), 80)).plain(),
+            "One\n\nTwo"
+        );
+    }
+    #[test]
+    fn spacing_keeps_nested_lists_soft_breaks_and_code_lines_intact() {
+        let source = "Before\ncontinued\n\n- parent\n  - child\n- sibling\n\n```text\nalpha\n\nbeta\n```\n\nAfter\n";
+        let text = render(source, &Options::new(PathBuf::from("."), 80)).plain();
+        assert_eq!(
+            text,
+            "Before\ncontinued\n\n* parent\n  * child\n* sibling\n\nalpha\n\nbeta\n\nAfter"
+        );
+        assert!(!text.contains("\n\n\n"));
+        assert_eq!(
+            render(
+                "- one\n\n- two\n\nAfter",
+                &Options::new(PathBuf::from("."), 80)
+            )
+            .plain(),
+            "* one\n\n* two\n\nAfter"
+        );
+        let bounded = render_limited(
+            "one\n\ntwo\n\nthree",
+            &Options::new(PathBuf::from("."), 80),
+            MAX_MARKDOWN,
+            3,
+        );
+        assert_eq!(bounded.lines.len(), 4);
+        assert!(
+            bounded
+                .lines
+                .last()
+                .unwrap()
+                .to_string()
+                .contains("line limit")
+        );
     }
     #[test]
     fn controls_limits_and_unclosed_fences_are_safe() {
