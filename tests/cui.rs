@@ -986,7 +986,13 @@ fn database_query_grid_plan_mouse_and_resize_use_real_terminal() -> Result<()> {
             && s.screen_text().contains("Operator properties")
     })?;
     app.command("DB Next operator")?;
-    app.wait("Cost:")?;
+    app.wait_for(
+        "next plan operator selected and command menu closed",
+        |screen| {
+            let text = screen.screen_text();
+            text.contains("表示対象: Sort") && !text.contains("Commands: arrows")
+        },
+    )?;
     app._master.resize(PtySize {
         cols: 60,
         rows: 18,
