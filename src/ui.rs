@@ -1,9 +1,9 @@
-use crate::{App, COMMANDS, HELP, Prompt, View};
+use crate::{App, COMMANDS, HELP, MouseAction, Prompt, View};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::path::Path;
@@ -15,16 +15,47 @@ fn block(title: impl Into<String>, active: bool) -> Block<'static> {
 }
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     app.hit_cells.clear();
-    let [header, body, status] = Layout::vertical([
+    app.mouse_actions.clear();
+    app.explorer_area = Rect::default();
+    app.palette_area = Rect::default();
+    if app.palette.is_none() {
+        app.palette_offset = 0;
+    }
+    let [header, tab_bar, body, status] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(frame.area());
+    let mut header_text = String::new();
+    for (label, action) in [
+        ("Menu", MouseAction::Key(crossterm::event::KeyCode::F(1))),
+        ("Edit", MouseAction::Key(crossterm::event::KeyCode::F(2))),
+        ("Git", MouseAction::Key(crossterm::event::KeyCode::F(3))),
+        ("Terminal", MouseAction::Run("Terminal")),
+        ("+Terminal", MouseAction::Run("New terminal")),
+        ("Preview", MouseAction::Run("Markdown preview")),
+        ("Split", MouseAction::Run("Split Markdown preview")),
+        ("Files", MouseAction::Key(crossterm::event::KeyCode::F(6))),
+        ("Table", MouseAction::Key(crossterm::event::KeyCode::F(7))),
+    ] {
+        let x = header.x.saturating_add(header_text.len() as u16);
+        if x < header.right() && header.height > 0 {
+            app.mouse_actions.push((
+                Rect::new(x, header.y, (label.len() as u16).min(header.right() - x), 1),
+                action,
+            ));
+        }
+        header_text.push_str(label);
+        header_text.push(' ');
+    }
     frame.render_widget(
-        Paragraph::new("yyte F1 Menu F2 Edit F3 Git F4 Shell F5 MD F6 Files F7 Table"),
+        Paragraph::new(header_text).style(Style::default().fg(Color::Cyan)),
         header,
     );
+    draw_tabs(frame, app, tab_bar);
+    app.preview_area = Rect::default();
     let show_explorer = body.width >= 65 || app.explorer;
     let [left, right] = Layout::horizontal([
         Constraint::Length(if show_explorer { body.width.min(28) } else { 0 }),
@@ -32,8 +63,23 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(body);
     if show_explorer {
-        let visible = left.height.saturating_sub(2) as usize;
+        let explorer_inner = block("Explorer", app.explorer).inner(left);
+        app.explorer_area = left;
+        let visible = explorer_inner.height as usize;
         let start = app.selected.saturating_sub(visible.saturating_sub(1));
+        for (row, i) in (start..app.entries.len()).take(visible).enumerate() {
+            if explorer_inner.width > 0 {
+                app.mouse_actions.push((
+                    Rect::new(
+                        explorer_inner.x,
+                        explorer_inner.y + row as u16,
+                        explorer_inner.width,
+                        1,
+                    ),
+                    MouseAction::Entry(i),
+                ));
+            }
+        }
         let items = app
             .entries
             .iter()
@@ -63,32 +109,18 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
     let title = match app.view {
-        View::Editor | View::Table | View::Sheet => app
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                format!(
-                    "{}{}{}",
-                    if i == app.tab { "[" } else { " " },
-                    e.path
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or("Untitled".into()),
-                    if e.modified() { " *]" } else { "]" }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        View::Terminal => "Terminal".into(),
-        View::Git => "Git".into(),
-        View::Diff => "yymerge comparison".into(),
-        View::Preview => "Markdown preview".into(),
-        View::Help => "Help".into(),
+        View::Editor => "Editor",
+        View::Table => "Table",
+        View::Sheet => "Workbook",
+        View::Terminal => "Terminal",
+        View::Git => "Git",
+        View::Diff => "yymerge comparison",
+        View::Preview => "Markdown preview",
+        View::Help => "Help",
     };
     let border = block(title, !app.explorer);
     let inner = border.inner(right);
+    app.content_area = inner;
     frame.render_widget(border, right);
     if inner.width > 0 && inner.height > 0 {
         match app.view {
@@ -96,51 +128,38 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             View::Sheet => draw_book(frame, app, inner),
             View::Table => draw_grid(frame, app, inner),
             View::Editor => {
-                let e = &mut app.tabs[app.tab];
-                let at = e.caret();
-                let mut rows = e.rows(inner.height as usize, inner.width as usize);
-                if !rows.iter().any(|r| {
-                    at >= r.0 && (at < r.1 || (r.1 == e.doc.snapshot().len() && at == r.1))
-                }) {
-                    e.top = at;
-                    rows = e.rows(inner.height as usize, inner.width as usize);
+                if app.preview_side && inner.width >= 24 && inner.height >= 6 {
+                    let [editor, preview] = if inner.width >= 48 {
+                        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                            .areas(inner)
+                    } else {
+                        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+                            .areas(inner)
+                    };
+                    draw_editor(frame, app, editor);
+                    let border = block("Preview", app.preview_focus);
+                    let content = border.inner(preview);
+                    frame.render_widget(border, preview);
+                    if preview.width >= 6 {
+                        let close = Rect::new(preview.right() - 5, preview.y, 3, 1);
+                        frame.render_widget(Paragraph::new("[x]"), close);
+                        app.mouse_actions
+                            .push((close, MouseAction::Run("Split Markdown preview")));
+                    }
+                    draw_preview(frame, app, content);
+                } else {
+                    app.preview_focus = false;
+                    draw_editor(frame, app, inner);
                 }
-                let selection = e.doc.selections().primary().range();
-                let lines = rows
-                    .iter()
-                    .map(|(start, end, text)| {
-                        let style = if selection.start < *end && selection.end > *start {
-                            Style::default().bg(Color::Blue)
-                        } else {
-                            Style::default()
-                        };
-                        Line::styled(text.clone(), style)
-                    })
-                    .collect::<Vec<_>>();
-                frame.render_widget(Paragraph::new(lines), inner);
-                if !app.explorer
-                    && let Some((row, (start, _, _))) =
-                        rows.iter().enumerate().rfind(|(_, r)| at >= r.0)
-                {
-                    let prefix = e.doc.snapshot().read(*start..at);
-                    let text = String::from_utf8_lossy(&prefix)
-                        .replace('\t', "    ")
-                        .replace('\r', "");
-                    let x = UnicodeWidthStr::width(text.as_str())
-                        .min(inner.width.saturating_sub(1) as usize)
-                        as u16;
-                    frame.set_cursor_position((inner.x + x, inner.y + row as u16));
-                }
-                app.rows = rows;
-                app.editor_area = inner;
             }
             View::Terminal => {
-                if let Some(shell) = &mut app.shell {
+                let tab = &mut app.tabs[app.tab];
+                if let Some(shell) = &mut tab.terminal {
                     if let Err(e) = shell.resize(inner.width, inner.height) {
                         app.status = e.to_string();
                     }
                     for y in 0..inner.height {
-                        let row = shell.screen.view_line(app.term_back, y as usize);
+                        let row = shell.screen.view_line(tab.term_back, y as usize);
                         for (x, cell) in row.cells.iter().enumerate().take(inner.width as usize) {
                             if cell.is_continuation() {
                                 continue;
@@ -164,7 +183,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                                 .set_style(style);
                         }
                     }
-                    if !app.explorer && app.term_back == 0 && shell.screen.modes().cursor_visible {
+                    if !app.explorer && tab.term_back == 0 && shell.screen.modes().cursor_visible {
                         let (y, x) = shell.screen.cursor();
                         if x < inner.width as usize && y < inner.height as usize {
                             frame.set_cursor_position((inner.x + x as u16, inner.y + y as u16));
@@ -182,19 +201,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                     .scroll((app.scroll, 0)),
                 inner,
             ),
-            View::Preview => {
-                app.request_preview(inner.width);
-                frame.render_widget(
-                    Paragraph::new(if app.preview_pending {
-                        vec![Line::raw("Rendering Markdown...")]
-                    } else {
-                        app.preview.lines.clone()
-                    })
-                    .wrap(Wrap { trim: false })
-                    .scroll((app.scroll, 0)),
-                    inner,
-                );
-            }
+            View::Preview => draw_preview(frame, app, inner),
         }
     }
     frame.render_widget(
@@ -216,7 +223,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         let h = if app.palette.is_some() {
             (COMMANDS.len() + 2) as u16
         } else {
-            4
+            5
         };
         let w = frame.area().width.saturating_sub(4).min(72);
         let rect = Rect::new(
@@ -225,6 +232,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             w,
             h.min(frame.area().height),
         );
+        app.palette_area = rect;
         frame.render_widget(Clear, rect);
         if let Some(selected) = app.palette {
             let items = COMMANDS
@@ -239,11 +247,25 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 })
                 .collect::<Vec<_>>();
             let mut state = ListState::default().with_selected(Some(selected));
+            *state.offset_mut() = app.palette_offset;
             frame.render_stateful_widget(
                 List::new(items).block(block("Commands: arrows / Enter / Esc", true)),
                 rect,
                 &mut state,
             );
+            app.palette_offset = state.offset();
+            let area = block("", true).inner(rect);
+            for (row, i) in (state.offset()..COMMANDS.len())
+                .take(area.height as usize)
+                .enumerate()
+            {
+                if area.width > 0 {
+                    app.mouse_actions.push((
+                        Rect::new(area.x, area.y + row as u16, area.width, 1),
+                        MouseAction::Command(i),
+                    ));
+                }
+            }
         } else {
             let title = match app.prompt {
                 Some(Prompt::Open) => "Open path",
@@ -288,6 +310,32 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 Paragraph::new(displayed.as_str()).block(block(title, true)),
                 rect,
             );
+            if rect.width > 2 && rect.height >= 4 {
+                let area = Rect::new(rect.x + 1, rect.bottom() - 2, rect.width - 2, 1);
+                let mut x = area.x;
+                for (label, action) in [
+                    (
+                        if matches!(app.prompt, Some(Prompt::Quit)) {
+                            "[Discard]"
+                        } else {
+                            "[OK]"
+                        },
+                        MouseAction::Accept,
+                    ),
+                    ("[Cancel]", MouseAction::Cancel),
+                ] {
+                    if x < area.right() {
+                        let width = (label.len() as u16).min(area.right() - x);
+                        let target = Rect::new(x, area.y, width, 1);
+                        frame.render_widget(
+                            Paragraph::new(label).style(Style::default().fg(Color::Cyan)),
+                            target,
+                        );
+                        app.mouse_actions.push((target, action));
+                        x += width + 1;
+                    }
+                }
+            }
             if rect.width > 2 && rect.height > 2 {
                 frame.set_cursor_position((
                     rect.x
@@ -304,12 +352,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
 
 fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui::widgets::{Cell, Row, Table};
+    let drag = app.resize_drag;
     let editor = &mut app.tabs[app.tab];
     let Some(grid) = &mut editor.table else {
-        frame.render_widget(
-            Paragraph::new("F7: CSV/TSV table; menu: Fixed-length table"),
-            area,
-        );
+        frame.render_widget(Paragraph::new("Menu: CSV/TSV or Fixed-length table"), area);
         return;
     };
     let Some(page) = &grid.page else {
@@ -319,78 +365,87 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         );
         return;
     };
-    let visible_rows = (area.height.saturating_sub(3) / grid.height).max(1) as usize;
-    grid.top = grid.top.min(grid.row);
-    if grid.row >= grid.top + visible_rows {
-        grid.top = grid.row + 1 - visible_rows;
+    let budget = area.height.saturating_sub(3).max(1);
+    let height =
+        |r: usize| drag.map_or(grid.row_height(r), |d| d.row(r as u64, grid.row_height(r)));
+    let mut top = grid.top.min(grid.row);
+    while top < grid.row
+        && (top..=grid.row).map(|r| u32::from(height(r))).sum::<u32>() > u32::from(budget)
+    {
+        top += 1;
     }
-    let visible_cols = (area.width.saturating_sub(8) / (grid.width + 1)).max(1) as usize;
+    let mut row_sizes = vec![];
+    let mut remain = budget;
+    for r in top..page.rows.len() {
+        if remain == 0 {
+            break;
+        }
+        let h = height(r).min(remain);
+        row_sizes.push((r, h));
+        remain -= h;
+    }
+    grid.top = top;
+    let column_count = page.rows.iter().map(|r| r.fields.len()).max().unwrap_or(1);
     grid.left = grid.left.min(grid.col);
-    if grid.col >= grid.left + visible_cols {
-        grid.left = grid.col + 1 - visible_cols;
+    let columns_for = |left: usize| {
+        let mut used = 8;
+        let mut cols = vec![];
+        for c in left..column_count {
+            let w = drag.map_or(grid.column_width(c), |d| {
+                d.column(c as u32, grid.column_width(c))
+            });
+            if used + w + 1 > area.width && !cols.is_empty() {
+                break;
+            }
+            cols.push((c, w));
+            used += w + 1;
+            if used >= area.width {
+                break;
+            }
+        }
+        cols
+    };
+    let mut columns = columns_for(grid.left);
+    if !columns.iter().any(|(c, _)| *c == grid.col) {
+        columns = columns_for(grid.col);
     }
-    let columns = page.rows.iter().map(|r| r.fields.len()).max().unwrap_or(1);
-    let headers = grid.mode.headers(columns);
+    if let Some((c, _)) = columns.first() {
+        grid.left = *c;
+    }
+    let headers = grid.mode.headers(column_count);
     let header = Row::new(
-        std::iter::once("Record".to_owned())
-            .chain(headers.into_iter().skip(grid.left).take(visible_cols)),
+        std::iter::once("Record".to_owned()).chain(
+            columns
+                .iter()
+                .map(|(c, _)| headers.get(*c).cloned().unwrap_or_default()),
+        ),
     )
     .style(Style::default().fg(Color::Cyan));
-    let rows = page
-        .rows
-        .iter()
-        .enumerate()
-        .skip(grid.top)
-        .take(visible_rows)
-        .map(|(r, row)| {
-            let mut cells = vec![Cell::from((grid.base + r as u64 + 1).to_string())];
-            for col in grid.left..(grid.left + visible_cols).min(row.fields.len()) {
-                let text = wrap_cell(&grid.value_at(row, col), grid.width, grid.height);
-                let cell = Cell::from(text);
-                let (t, l, b, rr) = grid.rectangle();
-                cells.push(if r >= t && r <= b && col >= l && col <= rr {
-                    cell.style(Style::default().bg(Color::Blue).fg(Color::White))
-                } else {
-                    cell
-                });
-            }
-            Row::new(cells).height(grid.height)
-        });
-    let widths = std::iter::once(Constraint::Length(7))
-        .chain((0..visible_cols).map(|_| Constraint::Length(grid.width)));
+    let (top, left, bottom, right) = grid.rectangle();
+    let rows = row_sizes.iter().map(|&(r, h)| {
+        let row = &page.rows[r];
+        let mut cells = vec![Cell::from((grid.base + r as u64 + 1).to_string())];
+        for &(c, w) in &columns {
+            let cell = Cell::from(wrap_cell(&grid.value_at(row, c), w, h));
+            cells.push(if r >= top && r <= bottom && c >= left && c <= right {
+                cell.style(Style::default().bg(Color::Blue).fg(Color::White))
+            } else {
+                cell
+            });
+        }
+        Row::new(cells).height(h)
+    });
     let [label, table, detail] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
     .areas(area);
-    for (n, _) in page
-        .rows
-        .iter()
-        .enumerate()
-        .skip(grid.top)
-        .take(visible_rows)
-    {
-        for c in grid.left..(grid.left + visible_cols).min(columns) {
-            let x = table.x + 8 + (c - grid.left) as u16 * (grid.width + 1);
-            let y = table.y + 1 + (n - grid.top) as u16 * grid.height;
-            if x < table.right() && y < table.bottom() {
-                app.hit_cells.push((
-                    Rect::new(
-                        x,
-                        y,
-                        grid.width.min(table.right() - x),
-                        grid.height.min(table.bottom() - y),
-                    ),
-                    n as u64,
-                    c as u32,
-                ));
-            }
-        }
-    }
+    let widths = std::iter::once(Constraint::Length(7))
+        .chain(columns.iter().map(|(_, w)| Constraint::Length(*w)));
     frame.render_widget(
         Paragraph::new(format!(
-            "{} / Enter: edit / PgUp,PgDn: page",
+            "{} | Menu: edit / drag headers to resize",
             grid.mode.name()
         )),
         label,
@@ -399,20 +454,55 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         Table::new(rows, widths).header(header).column_spacing(1),
         table,
     );
-    let info = if !page.notice.is_empty() {
-        page.notice.clone()
-    } else {
-        format!(
-            "Record {} / column {} | F8 delete / F9 append / F7 text",
-            grid.base + grid.row as u64 + 1,
-            grid.col + 1
-        )
-    };
-    frame.render_widget(Paragraph::new(info), detail);
+    let mut x = table.x + 8;
+    for &(c, w) in &columns {
+        if x + w < table.right() {
+            let target = Rect::new(x + w, table.y, 1, 1);
+            frame.render_widget(Paragraph::new("|"), target);
+            app.mouse_actions
+                .push((target, MouseAction::ColumnSize(c as u32, w)));
+        }
+        x = x.saturating_add(w + 1);
+    }
+    let mut y = table.y + 1;
+    for &(r, h) in &row_sizes {
+        let mut x = table.x + 8;
+        for &(c, w) in &columns {
+            if x < table.right() && y < table.bottom() {
+                app.hit_cells.push((
+                    Rect::new(x, y, w.min(table.right() - x), h.min(table.bottom() - y)),
+                    r as u64,
+                    c as u32,
+                ));
+            }
+            x = x.saturating_add(w + 1);
+        }
+        if table.width > 6 && y + h - 1 < table.bottom() {
+            let target = Rect::new(table.x + 6, y + h - 1, 1, 1);
+            frame.render_widget(Paragraph::new("_"), target);
+            app.mouse_actions
+                .push((target, MouseAction::RowSize(r as u64, grid.row_height(r))));
+        }
+        y = y.saturating_add(h);
+    }
+    frame.render_widget(
+        Paragraph::new(if page.notice.is_empty() {
+            format!(
+                "Record {} / column {} | row grip: _ / column grip: |",
+                grid.base + grid.row as u64 + 1,
+                grid.col + 1
+            )
+        } else {
+            page.notice.clone()
+        }),
+        detail,
+    );
+    app.editor_area = table;
 }
 
 fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
     use ratatui::widgets::{Cell, Row, Table};
+    let drag = app.resize_drag;
     let Some(book) = &mut app.tabs[app.tab].book else {
         frame.render_widget(Paragraph::new("Working on workbook..."), area);
         return;
@@ -424,7 +514,7 @@ fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     while (book.top..=book.row)
         .take(visible as usize + 1)
-        .map(|r| u64::from(book.row_height(r)))
+        .map(|r| u64::from(drag.map_or(book.row_height(r), |d| d.row(r, book.row_height(r)))))
         .sum::<u64>()
         > visible
         && book.top < book.row
@@ -434,7 +524,9 @@ fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut row_sizes = vec![];
     let mut remaining = visible as u16;
     for r in book.top..book.top + visible {
-        let height = book.row_height(r).min(remaining);
+        let height = drag
+            .map_or(book.row_height(r), |d| d.row(r, book.row_height(r)))
+            .min(remaining);
         if height == 0 {
             break;
         }
@@ -460,6 +552,7 @@ fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
             .copied()
             .unwrap_or(16.0)
             .clamp(4.0, 80.0) as u16;
+        let width = drag.map_or(width, |d| d.column(col, width));
         if used + u32::from(width) + 1 > u32::from(area.width) && !columns.is_empty() {
             break;
         }
@@ -564,6 +657,26 @@ fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
         Table::new(rows, widths).header(header).column_spacing(1),
         grid,
     );
+    let mut x = grid.x + 8;
+    for &(c, w) in &columns {
+        if x + w < grid.right() {
+            let target = Rect::new(x + w, grid.y, 1, 1);
+            frame.render_widget(Paragraph::new("|"), target);
+            app.mouse_actions
+                .push((target, MouseAction::ColumnSize(c, w)));
+        }
+        x = x.saturating_add(w + 1);
+    }
+    let mut y = grid.y + 1;
+    for &(r, h) in &row_sizes {
+        if grid.width > 6 && y + h - 1 < grid.bottom() {
+            let target = Rect::new(grid.x + 6, y + h - 1, 1, 1);
+            frame.render_widget(Paragraph::new("_"), target);
+            app.mouse_actions
+                .push((target, MouseAction::RowSize(r, book.row_height(r))));
+        }
+        y = y.saturating_add(h);
+    }
     let entry = book.entry().unwrap_or_default().replace('\n', "↵");
     frame.render_widget(
         Paragraph::new(format!(
@@ -660,4 +773,165 @@ fn draw_diff(frame: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(rows.iter().map(|r| line(*r, false)).collect::<Vec<_>>()),
         right,
     );
+}
+
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+    let e = &mut app.tabs[app.tab];
+    let at = e.caret();
+    let mut rows = e.rows(area.height as usize, area.width as usize);
+    if app.follow_caret
+        && !rows
+            .iter()
+            .any(|r| at >= r.0 && (at < r.1 || (r.1 == e.doc.snapshot().len() && at == r.1)))
+    {
+        e.top = at;
+        rows = e.rows(area.height as usize, area.width as usize);
+    }
+    let selection = e.doc.selections().primary().range();
+    let show = |bytes: Vec<u8>| {
+        String::from_utf8_lossy(&bytes)
+            .replace('\t', "    ")
+            .chars()
+            .filter(|c| *c != '\r' && *c != '\n')
+            .map(|c| if c.is_control() { '�' } else { c })
+            .collect::<String>()
+    };
+    let lines = rows
+        .iter()
+        .map(|(start, end, text)| {
+            if selection.start < *end && selection.end > *start {
+                let a = selection.start.clamp(*start, *end);
+                let b = selection.end.clamp(a, *end);
+                let snapshot = e.doc.snapshot();
+                Line::from(vec![
+                    Span::raw(show(snapshot.read(*start..a))),
+                    Span::styled(show(snapshot.read(a..b)), Style::default().bg(Color::Blue)),
+                    Span::raw(show(snapshot.read(b..*end))),
+                ])
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), area);
+    if !app.explorer
+        && !app.preview_focus
+        && let Some((row, (start, _, _))) = rows
+            .iter()
+            .enumerate()
+            .rfind(|(_, r)| at >= r.0 && at <= r.1)
+    {
+        let prefix = e.doc.snapshot().read(*start..at);
+        let text = String::from_utf8_lossy(&prefix)
+            .replace('\t', "    ")
+            .replace('\r', "");
+        let x =
+            UnicodeWidthStr::width(text.as_str()).min(area.width.saturating_sub(1) as usize) as u16;
+        frame.set_cursor_position((area.x + x, area.y + row as u16));
+    }
+    app.rows = rows;
+    app.editor_area = area;
+}
+
+fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.preview_area = area;
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    app.request_preview(area.width);
+    frame.render_widget(
+        Paragraph::new(if app.preview_pending {
+            vec![Line::raw("Rendering Markdown...")]
+        } else {
+            app.preview.lines.clone()
+        })
+        .wrap(Wrap { trim: false })
+        .scroll((app.scroll, 0)),
+        area,
+    );
+}
+fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    app.tab_offset = app.tab_offset.min(app.tabs.len().saturating_sub(1));
+    let room = area.width.saturating_sub(6);
+    let labels = app
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let name = if e.terminal.is_some() {
+                format!("Terminal {}", i + 1)
+            } else {
+                e.path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or("Untitled".into())
+            };
+            let mut shown = String::new();
+            for c in name.chars() {
+                if UnicodeWidthStr::width(shown.as_str())
+                    + unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+                    > 24
+                {
+                    break;
+                }
+                shown.push(c);
+            }
+            format!("[{}{}]", shown, if e.modified() { " *" } else { "" })
+        })
+        .collect::<Vec<_>>();
+    let visible = |offset: usize| {
+        let mut used = 0;
+        let mut out = vec![];
+        for (i, label) in labels.iter().enumerate().skip(offset) {
+            let w = (UnicodeWidthStr::width(label.as_str()) as u16 + 3).min(room);
+            if w == 0 || used + w > room {
+                break;
+            }
+            out.push((i, w));
+            used += w;
+        }
+        out
+    };
+    let mut shown = visible(app.tab_offset);
+    if !app.tab_manual_scroll && !shown.iter().any(|(i, _)| *i == app.tab) {
+        app.tab_offset = app.tab;
+        shown = visible(app.tab_offset);
+    }
+    frame.render_widget(
+        Paragraph::new("[<]"),
+        Rect::new(area.x, area.y, 3.min(area.width), 1),
+    );
+    app.mouse_actions.push((
+        Rect::new(area.x, area.y, 3.min(area.width), 1),
+        MouseAction::TabPage(false),
+    ));
+    let mut x = area.x + 3.min(area.width);
+    for (i, w) in shown {
+        let label_width = w.saturating_sub(3);
+        if label_width > 0 {
+            let rect = Rect::new(x, area.y, label_width, 1);
+            frame.render_widget(
+                Paragraph::new(labels[i].clone()).style(if i == app.tab {
+                    Style::default().bg(Color::Blue)
+                } else {
+                    Style::default()
+                }),
+                rect,
+            );
+            app.mouse_actions.push((rect, MouseAction::Tab(i)));
+        }
+        let close = Rect::new(x + label_width, area.y, 3.min(w), 1);
+        frame.render_widget(Paragraph::new(" x "), close);
+        app.mouse_actions.push((close, MouseAction::CloseTab(i)));
+        x += w;
+    }
+    if area.width >= 6 {
+        let rect = Rect::new(area.right() - 3, area.y, 3, 1);
+        frame.render_widget(Paragraph::new("[>]"), rect);
+        app.mouse_actions.push((rect, MouseAction::TabPage(true)));
+    }
 }

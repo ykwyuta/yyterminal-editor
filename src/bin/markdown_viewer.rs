@@ -43,10 +43,12 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
+            let _ = crossterm::execute!(std::io::stdout(), event::DisableMouseCapture);
             ratatui::restore();
         }
     }
     let _restore = Restore;
+    crossterm::execute!(std::io::stdout(), event::EnableMouseCapture)?;
     let (tx, rx) = std::sync::mpsc::channel();
     let mut rendered = Rendered::default();
     let mut pending = false;
@@ -55,6 +57,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     let mut left = 0u16;
     let mut error = String::new();
     let mut dirty = true;
+    let mut mouse_actions = vec![];
     loop {
         let width = terminal.size()?.width.clamp(1, 240);
         if width != last_width && !pending {
@@ -76,8 +79,31 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
         }
         if dirty {
             terminal.draw(|f| {
-                let [body, status] =
-                    Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+                let [controls, body, status] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                    Constraint::Length(1),
+                ])
+                .areas(f.area());
+                mouse_actions.clear();
+                let mut x = controls.x;
+                for (label, key) in [
+                    ("[Close]", KeyCode::Char('q')),
+                    ("[Up]", KeyCode::PageUp),
+                    ("[Down]", KeyCode::PageDown),
+                    ("[Top]", KeyCode::Home),
+                    ("[End]", KeyCode::End),
+                    ("[<]", KeyCode::Left),
+                    ("[>]", KeyCode::Right),
+                ] {
+                    if x < controls.right() && controls.height > 0 {
+                        let w = (label.len() as u16).min(controls.right() - x);
+                        let rect = ratatui::layout::Rect::new(x, controls.y, w, 1);
+                        f.render_widget(Paragraph::new(label), rect);
+                        mouse_actions.push((rect, key));
+                        x += w + 1;
+                    }
+                }
                 f.render_widget(
                     Paragraph::new(rendered.lines.clone())
                         .wrap(Wrap { trim: false })
@@ -98,9 +124,37 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
         }
         if event::poll(Duration::from_millis(30))? {
             dirty = true;
-            match event::read()? {
-                Event::Resize(_, _) => {}
-                Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
+            let input = match event::read()? {
+                Event::Mouse(mouse) => match mouse.kind {
+                    event::MouseEventKind::ScrollUp => {
+                        scroll = scroll.saturating_sub(3);
+                        None
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        scroll = scroll.saturating_add(3);
+                        None
+                    }
+                    event::MouseEventKind::ScrollLeft => {
+                        left = left.saturating_sub(4);
+                        None
+                    }
+                    event::MouseEventKind::ScrollRight => {
+                        left = left.saturating_add(4);
+                        None
+                    }
+                    event::MouseEventKind::Down(event::MouseButton::Left) => mouse_actions
+                        .iter()
+                        .find(|(r, _)| {
+                            r.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                        })
+                        .map(|(_, key)| Event::Key(event::KeyEvent::new(*key, KeyModifiers::NONE))),
+                    _ => None,
+                },
+                other => Some(other),
+            };
+            match input {
+                Some(Event::Resize(_, _)) => {}
+                Some(Event::Key(k)) if k.kind != KeyEventKind::Release => match k.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Up => scroll = scroll.saturating_sub(1),

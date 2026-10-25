@@ -43,3 +43,10 @@ Mermaidの全構文を実装したものではありません。新しいshape�
 構文の参照元：[Mermaid公式フローチャート](https://mermaid.js.org/syntax/flowchart.html)、[シーケンス図](https://mermaid.js.org/syntax/sequenceDiagram.html)、[ER図](https://mermaid.js.org/syntax/entityRelationshipDiagram.html)。実例は [demo/markdown-preview.md](../../demo/markdown-preview.md) にあります。
 
 Markdown全体はUTF-8で1MiBまで、描画結果は20,000行までです。yyteでは上限以降を省略した旨を表示し、単独コマンドは上限超過の入力をエラーにします。HTMLは説明付きの原文として表示し、リンクの自動実行はしません。
+
+
+## マウスとエディタ横のプレビュー
+
+yyte上部の `Split` で、編集とプレビューを並べられます。未保存の変更をそのまま反映し、プレビュー上のホイールは編集カーソルを動かさずプレビューだけをスクロールします。クリックでフォーカスを移し、プレビュー枠の `[x]` で閉じます。狭い端末では上下に配置し、極端に小さい場合は編集画面を優先します。`Preview` は従来の全画面プレビューです。
+
+単独ビューアーはホイールと上部の移動・終了ボタンでも操作できます。端末本来のドラッグ選択を行う際は、多くの端末でShiftを併用します。

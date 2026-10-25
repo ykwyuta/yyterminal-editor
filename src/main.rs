@@ -21,62 +21,7 @@ use ui::draw;
 use unicode_width::UnicodeWidthStr;
 
 const HELP: &str = include_str!("../docs/user/help.md");
-const COMMANDS: &[&str] = &[
-    "Open file",
-    "Open encoding",
-    "Workspace folders",
-    "Save",
-    "Save as",
-    "New file",
-    "Next tab",
-    "Close tab",
-    "Find text",
-    "Spreadsheet mode",
-    "New workbook",
-    "Insert rows",
-    "Delete rows",
-    "Insert columns",
-    "Delete columns",
-    "Move column",
-    "Sort ascending",
-    "Sort descending",
-    "Filter column",
-    "Clear sort/filter",
-    "Autofill down",
-    "Column width",
-    "Row height",
-    "Export fixed-length",
-    "Compare file (yymerge)",
-    "Bold",
-    "Number format",
-    "Next sheet",
-    "Add sheet",
-    "Row layout",
-    "Export CSV",
-    "Copy to system clipboard",
-    "CSV table",
-    "TSV table",
-    "Delimited table",
-    "Fixed-length table",
-    "Apply layout (.yyl)",
-    "Save layout (.yyl)",
-    "Infer fixed layout",
-    "Edit cell",
-    "Append record",
-    "Delete record",
-    "Explorer",
-    "Terminal",
-    "Git status",
-    "Git diff",
-    "Git staged diff",
-    "Git stage all",
-    "Git unstage all",
-    "Git commit",
-    "Markdown preview",
-    "Preview remote images",
-    "Help",
-    "Quit",
-];
+use yyterminal_editor::commands::COMMANDS;
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Editor,
@@ -140,6 +85,48 @@ enum Prompt {
     LayoutInfer,
     Quit,
 }
+#[derive(Clone, Copy)]
+enum MouseAction {
+    Key(K),
+    Run(&'static str),
+    Tab(usize),
+    CloseTab(usize),
+    TabPage(bool),
+    Accept,
+    Cancel,
+    ColumnSize(u32, u16),
+    RowSize(u64, u16),
+    Entry(usize),
+    Command(usize),
+}
+#[derive(Clone, Copy)]
+enum ResizeAxis {
+    Column(u32),
+    Row(u64),
+}
+#[derive(Clone, Copy)]
+struct ResizeDrag {
+    axis: ResizeAxis,
+    origin: u16,
+    initial: u16,
+    value: u16,
+}
+impl ResizeDrag {
+    fn column(self, c: u32, default: u16) -> u16 {
+        if matches!(self.axis,ResizeAxis::Column(col) if c==col) {
+            self.value
+        } else {
+            default
+        }
+    }
+    fn row(self, r: u64, default: u16) -> u16 {
+        if matches!(self.axis,ResizeAxis::Row(row) if r==row) {
+            self.value
+        } else {
+            default
+        }
+    }
+}
 struct App {
     root: PathBuf,
     roots: Vec<PathBuf>,
@@ -150,8 +137,7 @@ struct App {
     tab: usize,
     view: View,
     explorer: bool,
-    shell: Option<shell::Shell>,
-    term_back: usize,
+
     clipboard: String,
     output: String,
     preview: yyterminal_editor::preview::Rendered,
@@ -168,6 +154,19 @@ struct App {
     prompt: Option<Prompt>,
     input: String,
     palette: Option<usize>,
+    palette_offset: usize,
+    tab_offset: usize,
+    tab_manual_scroll: bool,
+    preview_side: bool,
+    preview_focus: bool,
+    preview_area: Rect,
+    follow_caret: bool,
+    resize_drag: Option<ResizeDrag>,
+    last_document: usize,
+    palette_area: Rect,
+    explorer_area: Rect,
+    content_area: Rect,
+    mouse_actions: Vec<(Rect, MouseAction)>,
     quit: bool,
     rows: Vec<(u64, u64, String)>,
     editor_area: Rect,
@@ -186,8 +185,7 @@ impl App {
             tab: 0,
             view: View::Editor,
             explorer: false,
-            shell: None,
-            term_back: 0,
+
             clipboard: String::new(),
             output: String::new(),
             preview: Default::default(),
@@ -196,7 +194,7 @@ impl App {
             preview_remote: false,
             comparison: None,
             scroll: 0,
-            status: "F1: commands / help   F6: explorer   F4: terminal".into(),
+            status: "Menu: commands / help | Files: explorer | +Terminal: new shell".into(),
             busy: false,
             pending_saves: std::collections::VecDeque::new(),
             tx,
@@ -204,6 +202,19 @@ impl App {
             prompt: None,
             input: String::new(),
             palette: None,
+            palette_offset: 0,
+            tab_offset: 0,
+            tab_manual_scroll: false,
+            preview_side: false,
+            preview_focus: false,
+            preview_area: Rect::default(),
+            follow_caret: true,
+            resize_drag: None,
+            last_document: 0,
+            palette_area: Rect::default(),
+            explorer_area: Rect::default(),
+            content_area: Rect::default(),
+            mouse_actions: vec![],
             quit: false,
             rows: vec![],
             editor_area: Rect::default(),
@@ -211,6 +222,43 @@ impl App {
         };
         app.read_dir(app.root.clone());
         app
+    }
+    fn select_tab(&mut self, tab: usize) {
+        if tab >= self.tabs.len() {
+            return;
+        }
+        if self.tab < self.tabs.len() && self.tabs[self.tab].terminal.is_none() {
+            self.last_document = self.tab;
+        }
+        self.tab = tab;
+        self.tab_manual_scroll = false;
+        self.explorer = false;
+        self.preview_focus = false;
+        self.follow_caret = true;
+        self.preview_key = None;
+        self.view = if self.tabs[tab].terminal.is_some() {
+            View::Terminal
+        } else {
+            self.last_document = tab;
+            if self.tabs[tab].spreadsheet {
+                View::Sheet
+            } else if self.tabs[tab].raw || self.tabs[tab].table.is_some() {
+                View::Table
+            } else {
+                View::Editor
+            }
+        };
+    }
+    fn new_terminal(&mut self) {
+        match shell::Shell::new(&self.root) {
+            Ok(shell) => {
+                let mut tab = Editor::empty();
+                tab.terminal = Some(shell);
+                self.tabs.push(tab);
+                self.select_tab(self.tabs.len() - 1);
+            }
+            Err(e) => self.status = e.to_string(),
+        }
     }
     fn request_preview(&mut self, width: u16) {
         let width = width.clamp(1, 240);
@@ -529,6 +577,7 @@ impl App {
                 },
                 Message::Open(result) => (*result).map(|e| {
                     if self.tabs.len() == 1
+                        && self.tabs[0].terminal.is_none()
                         && self.tabs[0].path.is_none()
                         && !self.tabs[0].modified()
                         && !self.pending_saves.iter().any(|(tab,_)|*tab==0)
@@ -539,6 +588,7 @@ impl App {
                         self.tabs.push(e);
                         self.tab = self.tabs.len() - 1;
                     }
+                    self.select_tab(self.tab);
                     self.view = View::Editor;
                     self.explorer = false;
                     self.status = "Opened".into();
@@ -570,12 +620,14 @@ impl App {
                 self.status = format!("{e:#}");
             }
         }
-        if let Some(shell) = &mut self.shell {
-            if let Err(error) = shell.poll() {
-                self.status = error.to_string();
-                changed = true;
+        for tab in &mut self.tabs {
+            if let Some(shell) = &mut tab.terminal {
+                if let Err(error) = shell.poll() {
+                    self.status = error.to_string();
+                    changed = true;
+                }
+                changed |= shell.screen.take_dirty();
             }
-            changed |= shell.screen.take_dirty();
         }
         if !self.busy
             && let Some((tab, path)) = self.pending_saves.pop_front()
@@ -775,13 +827,269 @@ impl App {
             Err(e) => self.status = e.to_string(),
         }
     }
-    fn mouse(&mut self, event: event::MouseEvent) {
-        if self.busy || self.palette.is_some() || self.prompt.is_some() {
+    fn open_selected_entry(&mut self) {
+        if self.busy {
             return;
         }
+        if let Some(path) = self.entries.get(self.selected).cloned() {
+            if path.is_dir() {
+                self.read_dir(path);
+            } else {
+                self.open(path);
+            }
+        }
+    }
+    fn mouse(&mut self, event: event::MouseEvent) {
         use event::{MouseButton, MouseEventKind as Kind};
+        let point = ratatui::layout::Position::new(event.column, event.row);
+        let action = self
+            .mouse_actions
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(point))
+            .map(|(_, a)| *a);
+        if let Some(mut drag) = self.resize_drag {
+            if self.prompt.is_some() || self.palette.is_some() {
+                self.resize_drag = None;
+                return;
+            }
+            if matches!(
+                event.kind,
+                Kind::Drag(MouseButton::Left) | Kind::Up(MouseButton::Left)
+            ) {
+                let (at, min, max) = match drag.axis {
+                    ResizeAxis::Column(_) => (event.column, 4, 80),
+                    ResizeAxis::Row(_) => (event.row, 1, 20),
+                };
+                drag.value = (i32::from(drag.initial) + i32::from(at) - i32::from(drag.origin))
+                    .clamp(min, max) as u16;
+                if event.kind == Kind::Up(MouseButton::Left) {
+                    self.resize_drag = None;
+                    if let Some(book) = &mut self.tabs[self.tab].book {
+                        book.anchor = None;
+                        match drag.axis {
+                            ResizeAxis::Column(c) => book.col = c,
+                            ResizeAxis::Row(r) => book.row = r,
+                        };
+                        self.book_op(match drag.axis {
+                            ResizeAxis::Column(_) => workbook::Op::Width(drag.value),
+                            ResizeAxis::Row(_) => workbook::Op::Height(drag.value),
+                        });
+                    } else if let Some(grid) = &mut self.tabs[self.tab].table {
+                        match drag.axis {
+                            ResizeAxis::Column(c) => {
+                                grid.widths.insert(c as usize, drag.value);
+                            }
+                            ResizeAxis::Row(r) => {
+                                grid.heights.insert(grid.base + r, drag.value);
+                            }
+                        }
+                    }
+                } else {
+                    self.resize_drag = Some(drag);
+                }
+                return;
+            }
+        }
+        if self.prompt.is_some() {
+            if event.kind == Kind::Down(MouseButton::Left) {
+                match action {
+                    Some(MouseAction::Accept) => {
+                        if matches!(self.prompt, Some(Prompt::Quit)) {
+                            self.input = "discard".into();
+                        }
+                        self.key(KeyEvent::new(K::Enter, M::NONE));
+                    }
+                    Some(MouseAction::Cancel) => {
+                        self.key(KeyEvent::new(K::Esc, M::NONE));
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+        if let Some(selected) = self.palette {
+            match event.kind {
+                Kind::ScrollUp => self.palette = Some(selected.saturating_sub(3)),
+                Kind::ScrollDown => self.palette = Some((selected + 3).min(COMMANDS.len() - 1)),
+                Kind::Moved => {
+                    if let Some(MouseAction::Command(i)) = action {
+                        self.palette = Some(i);
+                    }
+                }
+                Kind::Down(MouseButton::Left) => {
+                    if let Some(MouseAction::Command(i)) = action {
+                        self.palette = None;
+                        self.palette_offset = 0;
+                        self.command(COMMANDS[i]);
+                    } else if !self.palette_area.contains(point) {
+                        self.palette = None;
+                        self.palette_offset = 0;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if event.kind == Kind::Down(MouseButton::Left) {
+            match action {
+                Some(MouseAction::Key(key)) => {
+                    self.key(KeyEvent::new(key, M::NONE));
+                    return;
+                }
+                Some(MouseAction::ColumnSize(c, width)) => {
+                    if !self.busy {
+                        self.resize_drag = Some(ResizeDrag {
+                            axis: ResizeAxis::Column(c),
+                            origin: event.column,
+                            initial: width,
+                            value: width,
+                        });
+                    }
+                    return;
+                }
+                Some(MouseAction::RowSize(r, height)) => {
+                    if !self.busy {
+                        self.resize_drag = Some(ResizeDrag {
+                            axis: ResizeAxis::Row(r),
+                            origin: event.row,
+                            initial: height,
+                            value: height,
+                        });
+                    }
+                    return;
+                }
+                Some(MouseAction::Run(name)) => {
+                    self.command(name);
+                    return;
+                }
+                Some(MouseAction::Tab(i)) => {
+                    self.select_tab(i);
+                    return;
+                }
+                Some(MouseAction::CloseTab(i)) => {
+                    if !self.busy {
+                        self.select_tab(i);
+                        self.command("Close tab");
+                    }
+                    return;
+                }
+                Some(MouseAction::TabPage(next)) => {
+                    self.tab_manual_scroll = true;
+                    self.tab_offset = if next {
+                        (self.tab_offset + 1).min(self.tabs.len().saturating_sub(1))
+                    } else {
+                        self.tab_offset.saturating_sub(1)
+                    };
+                    return;
+                }
+                Some(MouseAction::Entry(i)) => {
+                    if !self.busy {
+                        self.explorer = true;
+                        self.selected = i;
+                        self.open_selected_entry();
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if self.busy {
+            return;
+        }
+        if matches!(event.kind, Kind::ScrollUp | Kind::ScrollDown)
+            && self.explorer_area.contains(point)
+        {
+            self.explorer = true;
+            self.selected = if event.kind == Kind::ScrollUp {
+                self.selected.saturating_sub(3)
+            } else {
+                (self.selected + 3).min(self.entries.len().saturating_sub(1))
+            };
+            return;
+        }
+        if self.preview_area.contains(point) {
+            if event.kind == Kind::Down(MouseButton::Left) {
+                self.preview_focus = true;
+                self.explorer = false;
+                return;
+            }
+            if matches!(event.kind, Kind::ScrollUp | Kind::ScrollDown) {
+                self.scroll = if event.kind == Kind::ScrollUp {
+                    self.scroll.saturating_sub(3)
+                } else {
+                    self.scroll.saturating_add(3)
+                };
+                return;
+            }
+        }
+        if self.view == View::Editor
+            && self.editor_area.contains(point)
+            && matches!(
+                event.kind,
+                Kind::Down(MouseButton::Left) | Kind::Drag(MouseButton::Left)
+            )
+        {
+            self.explorer = false;
+            self.preview_focus = false;
+            if let Some((start, end, _)) = self.rows.get((event.row - self.editor_area.y) as usize)
+            {
+                let e = &mut self.tabs[self.tab];
+                let at = e.offset_at(*start, *end, (event.column - self.editor_area.x) as usize);
+                e.move_to(
+                    at,
+                    event.modifiers.contains(M::SHIFT) || matches!(event.kind, Kind::Drag(_)),
+                );
+                self.follow_caret = true;
+            }
+            return;
+        }
+        if self.content_area.contains(point)
+            && matches!(
+                event.kind,
+                Kind::Down(MouseButton::Left) | Kind::Down(MouseButton::Right)
+            )
+        {
+            self.explorer = false;
+        }
         if matches!(event.kind, Kind::ScrollUp | Kind::ScrollDown) {
             let up = event.kind == Kind::ScrollUp;
+            if self.content_area.contains(point) {
+                match self.view {
+                    View::Editor => {
+                        self.tabs[self.tab].scroll_rows(!up, 3, self.editor_area.width as usize);
+                        self.follow_caret = false;
+                    }
+                    View::Preview | View::Git | View::Help => {
+                        self.scroll = if up {
+                            self.scroll.saturating_sub(3)
+                        } else {
+                            self.scroll.saturating_add(3)
+                        };
+                    }
+                    View::Diff => {
+                        if let Some(diff) = &mut self.comparison {
+                            diff.top = if up {
+                                diff.top.saturating_sub(3)
+                            } else {
+                                (diff.top + 3).min(diff.index.rows.saturating_sub(1))
+                            };
+                        }
+                    }
+                    View::Terminal => {
+                        let tab = &mut self.tabs[self.tab];
+                        if let Some(shell) = &tab.terminal {
+                            tab.term_back = if up {
+                                (tab.term_back + 3).min(shell.screen.history_len())
+                            } else {
+                                tab.term_back.saturating_sub(3)
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             if self.view == View::Sheet {
                 if let Some(book) = &mut self.tabs[self.tab].book {
                     if up {
@@ -805,13 +1113,16 @@ impl App {
         ) {
             return;
         }
-        let point = ratatui::layout::Position::new(event.column, event.row);
         let Some((_, r, c)) = self
             .hit_cells
             .iter()
             .find(|(rect, _, _)| rect.contains(point))
             .copied()
         else {
+            if event.kind == Kind::Down(MouseButton::Right) && self.content_area.contains(point) {
+                self.palette = Some(0);
+                self.palette_offset = 0;
+            }
             return;
         };
         let extend = event.modifiers.contains(M::SHIFT) || matches!(event.kind, Kind::Drag(_));
@@ -859,6 +1170,10 @@ impl App {
         self.explorer = false;
     }
     fn table_toggle(&mut self) {
+        if self.tabs[self.tab].terminal.is_some() {
+            self.status = "Select a document tab for table editing".into();
+            return;
+        }
         if self.tabs[self.tab].spreadsheet {
             self.view = View::Sheet;
             self.explorer = false;
@@ -980,6 +1295,28 @@ impl App {
         self.input.clear();
     }
     fn command(&mut self, name: &str) {
+        if self.tabs[self.tab].terminal.is_some()
+            && matches!(
+                name,
+                "Save"
+                    | "Save as"
+                    | "Spreadsheet mode"
+                    | "CSV table"
+                    | "TSV table"
+                    | "Delimited table"
+                    | "Fixed-length table"
+                    | "Apply layout (.yyl)"
+                    | "Save layout (.yyl)"
+                    | "Infer fixed layout"
+                    | "Export fixed-length"
+                    | "Compare file (yymerge)"
+                    | "Markdown preview"
+            )
+        {
+            self.status = "Select a document tab for this operation".into();
+            return;
+        }
+
         match name {
             "Spreadsheet mode" => self.make_workbook(false),
             "New workbook" => self.make_workbook(true),
@@ -1067,19 +1404,11 @@ impl App {
             "New file" => {
                 self.tabs.push(Editor::empty());
                 self.tab = self.tabs.len() - 1;
+                self.select_tab(self.tab);
                 self.view = View::Editor;
                 self.explorer = false;
             }
-            "Next tab" => {
-                self.tab = (self.tab + 1) % self.tabs.len();
-                self.view = if self.tabs[self.tab].spreadsheet {
-                    View::Sheet
-                } else if self.tabs[self.tab].raw {
-                    View::Table
-                } else {
-                    View::Editor
-                };
-            }
+            "Next tab" => self.select_tab((self.tab + 1) % self.tabs.len()),
             "Close tab" => {
                 if self.busy || !self.pending_saves.is_empty() {
                     self.status = "Wait for the active operation before closing tabs".into();
@@ -1087,38 +1416,27 @@ impl App {
                 }
                 if self.tabs[self.tab].modified() {
                     self.status = "Save this document before closing its tab".into();
-                } else {
-                    self.tabs.remove(self.tab);
-                    if self.tabs.is_empty() {
-                        self.tabs.push(Editor::empty());
-                    }
-                    self.tab = self.tab.min(self.tabs.len() - 1);
-                    self.view = if self.tabs[self.tab].spreadsheet {
-                        View::Sheet
-                    } else if self.tabs[self.tab].raw {
-                        View::Table
-                    } else {
-                        View::Editor
-                    };
+                    return;
                 }
+                self.tabs.remove(self.tab);
+                if self.tabs.is_empty() {
+                    self.tabs.push(Editor::empty());
+                }
+                self.last_document = self.last_document.min(self.tabs.len() - 1);
+                self.select_tab(self.tab.min(self.tabs.len() - 1));
             }
             "Find text" => self.ask(Prompt::Find),
             "Explorer" => {
                 self.explorer = true;
             }
             "Terminal" => {
-                if self.shell.is_none() {
-                    match shell::Shell::new(&self.root) {
-                        Ok(s) => self.shell = Some(s),
-                        Err(e) => {
-                            self.status = e.to_string();
-                            return;
-                        }
-                    }
+                if let Some(tab) = self.tabs.iter().position(|e| e.terminal.is_some()) {
+                    self.select_tab(tab);
+                } else {
+                    self.new_terminal();
                 }
-                self.view = View::Terminal;
-                self.explorer = false;
             }
+            "New terminal" => self.new_terminal(),
             "Git status" => self.git(vec!["status".into(), "--short".into(), "--branch".into()]),
             "Git diff" => self.git(vec![
                 "diff".into(),
@@ -1138,6 +1456,57 @@ impl App {
                 self.preview_remote = !self.preview_remote;
                 self.preview_key = None;
                 self.status = format!("Remote preview images: {}", self.preview_remote);
+            }
+            "Split Markdown preview" => {
+                if self.tabs[self.tab].terminal.is_some() {
+                    self.status = "Select a Markdown document first".into();
+                    return;
+                }
+                self.preview_side = !self.preview_side;
+                self.preview_focus = false;
+                self.preview_key = None;
+                self.view = View::Editor;
+                self.explorer = false;
+                self.scroll = 0;
+            }
+            "Copy" | "Cut" | "Paste" | "Undo" | "Redo" | "Select all" => {
+                if self.tabs[self.tab].terminal.is_some() {
+                    if name == "Paste" {
+                        if let Some(shell) = &mut self.tabs[self.tab].terminal {
+                            let bytes = yy_term::keys::paste(&self.clipboard, shell.screen.modes());
+                            if let Err(e) = shell.send(&bytes) {
+                                self.status = e.to_string();
+                            }
+                        }
+                    } else if name == "Copy" {
+                        self.clipboard = self.tabs[self.tab]
+                            .terminal
+                            .as_ref()
+                            .unwrap()
+                            .screen
+                            .screen_text();
+                    } else {
+                        self.status = "This operation applies to document tabs".into();
+                    }
+                } else {
+                    let key = match name {
+                        "Copy" => 'c',
+                        "Cut" => 'x',
+                        "Paste" => 'v',
+                        "Undo" => 'z',
+                        "Redo" => 'y',
+                        _ => 'a',
+                    };
+                    self.preview_focus = false;
+                    self.view = if self.tabs[self.tab].spreadsheet {
+                        View::Sheet
+                    } else if self.tabs[self.tab].raw {
+                        View::Table
+                    } else {
+                        View::Editor
+                    };
+                    self.key(KeyEvent::new(K::Char(key), M::CONTROL));
+                }
             }
             "Markdown preview" => {
                 self.preview_key = None;
@@ -1281,7 +1650,7 @@ impl App {
             Prompt::BookWidth if !self.tabs[self.tab].spreadsheet => match input.parse::<u16>() {
                 Ok(w) if (4..=80).contains(&w) => {
                     if let Some(grid) = &mut self.tabs[self.tab].table {
-                        grid.width = w;
+                        grid.widths.insert(grid.col, w);
                     }
                 }
                 _ => self.status = "Width: 4..80".into(),
@@ -1457,6 +1826,20 @@ impl App {
                 return;
             }
             K::F(2) => {
+                if self.tabs[self.tab].terminal.is_some() {
+                    if let Some(i) = self
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.terminal.is_none())
+                        .min_by_key(|(i, _)| i.abs_diff(self.last_document))
+                        .map(|(i, _)| i)
+                    {
+                        self.select_tab(i);
+                    } else {
+                        self.command("New file");
+                    }
+                }
                 self.view = if self.tabs[self.tab].spreadsheet {
                     View::Sheet
                 } else if self.tabs[self.tab].raw {
@@ -1464,6 +1847,7 @@ impl App {
                 } else {
                     View::Editor
                 };
+                self.preview_focus = false;
                 self.explorer = false;
                 return;
             }
@@ -1486,18 +1870,27 @@ impl App {
             self.command("Quit");
             return;
         }
+        if key.modifiers.contains(M::CONTROL) && matches!(key.code, K::Tab | K::Char('w')) {
+            self.command(if key.code == K::Tab {
+                "Next tab"
+            } else {
+                "Close tab"
+            });
+            return;
+        }
         if self.view == View::Terminal && !self.explorer {
-            if let Some(shell) = &mut self.shell {
+            let tab = &mut self.tabs[self.tab];
+            if let Some(shell) = &mut tab.terminal {
                 if key.modifiers.contains(M::SHIFT) && matches!(key.code, K::PageUp | K::PageDown) {
                     if key.code == K::PageUp {
-                        self.term_back =
-                            (self.term_back + shell.screen.rows()).min(shell.screen.history_len());
+                        tab.term_back =
+                            (tab.term_back + shell.screen.rows()).min(shell.screen.history_len());
                     } else {
-                        self.term_back = self.term_back.saturating_sub(shell.screen.rows());
+                        tab.term_back = tab.term_back.saturating_sub(shell.screen.rows());
                     }
                     return;
                 }
-                self.term_back = 0;
+                tab.term_back = 0;
                 let k = match key.code {
                     K::Char(c) => yy_term::Key::Char(c),
                     K::Enter => yy_term::Key::Enter,
@@ -1546,21 +1939,23 @@ impl App {
                 return;
             }
         }
+        if self.view == View::Editor && self.preview_side && self.preview_focus && !self.explorer {
+            match key.code {
+                K::Up => self.scroll = self.scroll.saturating_sub(1),
+                K::Down => self.scroll = self.scroll.saturating_add(1),
+                K::PageUp => self.scroll = self.scroll.saturating_sub(10),
+                K::PageDown => self.scroll = self.scroll.saturating_add(10),
+                _ => {}
+            }
+            return;
+        }
         if self.explorer {
             match key.code {
                 K::Up => self.selected = self.selected.saturating_sub(1),
                 K::Down => {
                     self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1))
                 }
-                K::Enter => {
-                    if let Some(path) = self.entries.get(self.selected).cloned() {
-                        if path.is_dir() {
-                            self.read_dir(path)
-                        } else {
-                            self.open(path)
-                        }
-                    }
-                }
+                K::Enter => self.open_selected_entry(),
                 _ => {}
             }
             return;
@@ -1624,6 +2019,7 @@ impl App {
             let e = &mut self.tabs[self.tab];
             match key.code {
                 K::Char('v') => {
+                    self.follow_caret = true;
                     e.doc.paste(&self.clipboard);
                 }
                 _ => match e.doc.selected_text(1024 * 1024) {
@@ -1639,6 +2035,7 @@ impl App {
             }
             return;
         }
+        self.follow_caret = true;
         let e = &mut self.tabs[self.tab];
         let shift = key.modifiers.contains(M::SHIFT);
         let ctrl = key.modifiers.contains(M::CONTROL);
@@ -1793,7 +2190,7 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                     } else if app.prompt.is_some() {
                         app.input.push_str(&text);
                     } else if app.view == View::Terminal {
-                        if let Some(shell) = &mut app.shell {
+                        if let Some(shell) = &mut app.tabs[app.tab].terminal {
                             let bytes = yy_term::keys::paste(&text, shell.screen.modes());
                             shell.send(&bytes)?;
                         }
@@ -1806,7 +2203,9 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                         {
                             app.status = error.to_string();
                         }
-                    } else if app.view == View::Editor && !app.explorer {
+                    } else if app.view == View::Editor && !app.explorer && !app.preview_focus {
+                        app.preview_focus = false;
+                        app.follow_caret = true;
                         app.tabs[app.tab].doc.paste(&text);
                     }
                 }
@@ -2070,6 +2469,345 @@ mod tests {
         assert_eq!(app.tabs.len(), 2);
         Ok(())
     }
+    fn mouse_at(app: &mut App, kind: event::MouseEventKind, x: u16, y: u16) {
+        app.mouse(event::MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: M::NONE,
+        });
+    }
+    fn action_rect(app: &App, predicate: impl Fn(MouseAction) -> bool) -> Rect {
+        app.mouse_actions
+            .iter()
+            .find(|(_, a)| predicate(*a))
+            .expect("mouse action missing")
+            .0
+    }
+    #[test]
+    fn mouse_text_selection_dialog_buttons_and_tabs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.tabs[0].doc = yy_core::Document::from_text("a日\tb\nz");
+        render_mouse(&mut app, 120, 24)?;
+        let area = app.editor_area;
+        mouse_at(
+            &mut app,
+            event::MouseEventKind::Down(event::MouseButton::Left),
+            area.x + 2,
+            area.y,
+        );
+        mouse_at(
+            &mut app,
+            event::MouseEventKind::Drag(event::MouseButton::Left),
+            area.x + 7,
+            area.y,
+        );
+        assert_eq!(
+            app.tabs[0].doc.selected_text(100).unwrap().as_deref(),
+            Some("日\t")
+        );
+        app.command("Copy");
+        assert_eq!(app.clipboard, "日\t");
+        app.command("Save as");
+        app.input = "cancelled.txt".into();
+        render_mouse(&mut app, 120, 24)?;
+        let cancel = action_rect(&app, |a| matches!(a, MouseAction::Cancel));
+        click(&mut app, cancel);
+        assert!(app.prompt.is_none());
+        assert!(!dir.path().join("cancelled.txt").exists());
+        app.command("Save as");
+        app.input = "saved.txt".into();
+        render_mouse(&mut app, 120, 24)?;
+        let accept = action_rect(&app, |a| matches!(a, MouseAction::Accept));
+        click(&mut app, accept);
+        wait(&mut app);
+        assert_eq!(
+            std::fs::read(dir.path().join("saved.txt"))?,
+            "a日\tb\nz".as_bytes()
+        );
+        app.command("New file");
+        render_mouse(&mut app, 120, 24)?;
+        let first = action_rect(&app, |a| matches!(a, MouseAction::Tab(0)));
+        click(&mut app, first);
+        assert_eq!(app.tab, 0);
+        render_mouse(&mut app, 120, 24)?;
+        let close = action_rect(&app, |a| matches!(a, MouseAction::CloseTab(1)));
+        click(&mut app, close);
+        assert_eq!(app.tabs.len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn split_preview_follows_unsaved_text_and_scrolls_independently() -> Result<()> {
+        let mut app = App::new(std::env::current_dir()?);
+        wait(&mut app);
+        app.tabs[0].doc = yy_core::Document::from_text(
+            &(0..40).map(|i| format!("line {i}\n")).collect::<String>(),
+        );
+        app.command("Split Markdown preview");
+        render_mouse(&mut app, 120, 24)?;
+        assert!(app.preview_area.x > app.editor_area.x);
+        assert!(app.preview_area.width > 0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.preview_pending {
+            app.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(app.preview.plain().contains("line 0"));
+        app.tabs[0].doc.insert_text("UNSAVED\n", false);
+        render_mouse(&mut app, 120, 24)?;
+        while app.preview_pending {
+            app.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(app.preview.plain().contains("UNSAVED"));
+        let area = app.preview_area;
+        let caret = app.tabs[0].caret();
+        mouse_at(&mut app, event::MouseEventKind::ScrollDown, area.x, area.y);
+        assert_eq!(app.scroll, 3);
+        assert_eq!(app.tabs[0].caret(), caret);
+        let area = app.editor_area;
+        mouse_at(&mut app, event::MouseEventKind::ScrollDown, area.x, area.y);
+        render_mouse(&mut app, 120, 24)?;
+        assert!(app.tabs[0].top > 0);
+        assert_eq!(app.scroll, 3);
+        render_mouse(&mut app, 40, 16)?;
+        assert!(app.preview_area.y > app.editor_area.y);
+        for (w, h) in [(1, 1), (20, 6), (40, 12)] {
+            render_mouse(&mut app, w, h)?;
+        }
+        Ok(())
+    }
+    fn drag_resize(app: &mut App, rect: Rect, dx: u16, dy: u16) {
+        mouse_at(
+            app,
+            event::MouseEventKind::Down(event::MouseButton::Left),
+            rect.x,
+            rect.y,
+        );
+        mouse_at(
+            app,
+            event::MouseEventKind::Drag(event::MouseButton::Left),
+            rect.x + dx,
+            rect.y + dy,
+        );
+        mouse_at(
+            app,
+            event::MouseEventKind::Up(event::MouseButton::Left),
+            rect.x + dx,
+            rect.y + dy,
+        );
+    }
+    #[test]
+    fn mouse_drag_resizes_raw_grid_and_workbook_with_one_undo() -> Result<()> {
+        let mut app = App::new(std::env::current_dir()?);
+        wait(&mut app);
+        app.tabs[0].doc = yy_core::Document::from_text("a,b\n1,2\n");
+        app.table_mode(yy_delimited::Dialect::csv());
+        app.poll();
+        wait(&mut app);
+        render_mouse(&mut app, 120, 24)?;
+        let original = app.tabs[0]
+            .doc
+            .snapshot()
+            .read(0..app.tabs[0].doc.snapshot().len());
+        let col = action_rect(&app, |a| matches!(a, MouseAction::ColumnSize(0, _)));
+        drag_resize(&mut app, col, 5, 0);
+        render_mouse(&mut app, 120, 24)?;
+        let row = action_rect(&app, |a| matches!(a, MouseAction::RowSize(0, _)));
+        drag_resize(&mut app, row, 0, 3);
+        let grid = app.tabs[0].table.as_ref().unwrap();
+        assert_eq!(grid.column_width(0), 24);
+        assert_eq!(grid.row_height(0), 4);
+        assert_eq!(
+            app.tabs[0].doc.snapshot().read(0..original.len() as u64),
+            original
+        );
+        let mut book = workbook::Book::empty()?;
+        book.apply(workbook::Op::Set("text".into()))?;
+        app.tabs[0].book = Some(book);
+        app.tabs[0].spreadsheet = true;
+        app.view = View::Sheet;
+        render_mouse(&mut app, 120, 24)?;
+        let col = action_rect(&app, |a| matches!(a, MouseAction::ColumnSize(0, _)));
+        drag_resize(&mut app, col, 5, 0);
+        wait(&mut app);
+        assert_eq!(
+            app.tabs[0]
+                .book
+                .as_ref()
+                .unwrap()
+                .current()
+                .col_widths
+                .get(&0),
+            Some(&21.0)
+        );
+        render_mouse(&mut app, 120, 24)?;
+        let row = action_rect(&app, |a| matches!(a, MouseAction::RowSize(0, _)));
+        drag_resize(&mut app, row, 0, 3);
+        wait(&mut app);
+        let book = app.tabs[0].book.as_mut().unwrap();
+        assert_eq!(book.row_height(0), 4);
+        book.doc.undo();
+        assert_eq!(book.row_height(0), 1);
+        book.doc.undo();
+        assert!(!book.current().col_widths.contains_key(&0));
+        Ok(())
+    }
+    #[test]
+    #[cfg(unix)]
+    fn terminal_tabs_keep_background_output_and_close_individually() -> Result<()> {
+        let mut app = App::new(std::env::current_dir()?);
+        wait(&mut app);
+        app.tabs[0].doc.insert_text("document", false);
+        app.command("New terminal");
+        assert_eq!(app.tab, 1);
+        assert!(app.view == View::Terminal);
+        app.key(KeyEvent::new(K::F(7), M::NONE));
+        assert!(app.view == View::Terminal);
+        assert!(app.tabs[1].table.is_none());
+        app.tabs[1]
+            .terminal
+            .as_mut()
+            .unwrap()
+            .send(b"printf '\\102\\101\\103\\113\\107\\122\\117\\125\\116\\104\\n'\r")?;
+        app.select_tab(0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            app.poll();
+            if app.tabs[1]
+                .terminal
+                .as_ref()
+                .unwrap()
+                .screen
+                .screen_text()
+                .contains("BACKGROUND")
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        app.command("Terminal");
+        assert_eq!(app.tab, 1);
+        app.command("New terminal");
+        assert_eq!(app.tabs.len(), 3);
+        app.command("Close tab");
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.tabs[1].terminal.is_some());
+        app.select_tab(1);
+        app.command("Close tab");
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.tabs[0].modified());
+        assert_eq!(app.tabs[0].doc.snapshot().read(0..8), b"document");
+        Ok(())
+    }
+    fn render_mouse(app: &mut App, width: u16, height: u16) -> Result<()> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))?;
+        terminal.draw(|f| draw(f, app))?;
+        Ok(())
+    }
+    fn click(app: &mut App, rect: Rect) {
+        app.mouse(event::MouseEvent {
+            kind: event::MouseEventKind::Down(event::MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: M::NONE,
+        });
+    }
+    #[test]
+    fn mouse_opens_menu_commands_and_blocks_background_clicks() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join("child"))?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        render_mouse(&mut app, 80, 16)?;
+        let menu = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a, MouseAction::Key(K::F(1))))
+            .unwrap()
+            .0;
+        click(&mut app, menu);
+        assert_eq!(app.palette, Some(0));
+        render_mouse(&mut app, 80, 16)?;
+        let new = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a,MouseAction::Command(i) if COMMANDS[*i]=="New file"))
+            .unwrap()
+            .0;
+        let count = app.tabs.len();
+        click(&mut app, new);
+        assert_eq!(app.tabs.len(), count + 1);
+        assert!(app.palette.is_none());
+        render_mouse(&mut app, 80, 16)?;
+        click(&mut app, menu);
+        render_mouse(&mut app, 80, 16)?;
+        let entry=app.mouse_actions.iter().find(|(_,a)|matches!(a,MouseAction::Entry(i) if app.entries[*i].file_name().is_some_and(|s|s=="child"))).unwrap().0;
+        let root = app.root.clone();
+        click(&mut app, entry);
+        assert!(app.palette.is_none());
+        assert_eq!(app.root, root);
+        assert!(!app.busy);
+        Ok(())
+    }
+    #[test]
+    fn mouse_folder_file_parent_and_scrolled_menu_at_small_sizes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let child = dir.path().join("child");
+        std::fs::create_dir(&child)?;
+        std::fs::write(child.join("note.txt"), b"from mouse\n")?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.explorer = true;
+        render_mouse(&mut app, 40, 12)?;
+        let entry = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a,MouseAction::Entry(i) if app.entries[*i]==child))
+            .unwrap()
+            .0;
+        click(&mut app, entry);
+        wait(&mut app);
+        assert_eq!(app.root, child);
+        render_mouse(&mut app, 40, 12)?;
+        let file=app.mouse_actions.iter().find(|(_,a)|matches!(a,MouseAction::Entry(i) if app.entries[*i].file_name().is_some_and(|s|s=="note.txt"))).unwrap().0;
+        click(&mut app, file);
+        wait(&mut app);
+        assert_eq!(
+            app.tabs[app.tab].path,
+            Some(child.join("note.txt").canonicalize()?)
+        );
+        app.explorer = true;
+        render_mouse(&mut app, 40, 12)?;
+        let parent = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a, MouseAction::Entry(0)))
+            .unwrap()
+            .0;
+        click(&mut app, parent);
+        wait(&mut app);
+        assert_eq!(app.root, dir.path());
+        app.palette = Some(COMMANDS.iter().position(|c| *c == "Help").unwrap());
+        render_mouse(&mut app, 40, 8)?;
+        assert!(app.palette_offset > 0);
+        let help = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a,MouseAction::Command(i) if COMMANDS[*i]=="Help"))
+            .unwrap()
+            .0;
+        click(&mut app, help);
+        assert!(app.view == View::Help);
+        assert!(app.palette.is_none());
+        Ok(())
+    }
     #[test]
     fn mouse_rectangle_tracks_resized_row_heights() -> Result<()> {
         let mut app = App::new(std::env::current_dir()?);
@@ -2109,6 +2847,15 @@ mod tests {
             });
         }
         assert_eq!(app.tabs[0].book.as_ref().unwrap().copy()?, "a\tb\nc\td");
+        app.mouse(event::MouseEvent {
+            kind: event::MouseEventKind::Down(event::MouseButton::Right),
+            column: first.x,
+            row: first.y,
+            modifiers: M::NONE,
+        });
+        assert_eq!(app.palette, Some(0));
+        let book = app.tabs[0].book.as_ref().unwrap();
+        assert_eq!((book.row, book.col), (0, 0));
         Ok(())
     }
     #[test]

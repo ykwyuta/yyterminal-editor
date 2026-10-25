@@ -215,31 +215,128 @@ impl Harness {
     fn wait(&mut self, text: &str) -> Result<()> {
         self.wait_for(text, |screen| screen.screen_text().contains(text))
     }
-    fn command(&mut self, name: &str) -> Result<()> {
-        self.send(b"\x1bOP")?;
-        self.wait("Commands: arrows")?;
-        let highlighted = |screen: &yy_term::Terminal| -> String {
-            (0..screen.rows())
-                .filter_map(|i| {
-                    let row = screen.screen_row(i);
-                    row.cells
-                        .iter()
-                        .any(|c| c.attr.bg == yy_term::Color::Indexed(4))
-                        .then(|| row.text())
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        for _ in 0..128 {
-            let current = highlighted(&self.screen);
-            if current.contains(name) {
-                self.send(b"\r")?;
+    fn click_text(&mut self, label: &str) -> Result<()> {
+        for row in 0..self.screen.rows() {
+            let text = self.screen.screen_row(row).text();
+            if let Some(at) = text.find(label) {
+                let col = unicode_width::UnicodeWidthStr::width(&text[..at]);
+                self.send(
+                    format!(
+                        "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+                        col + 1,
+                        row + 1,
+                        col + 1,
+                        row + 1
+                    )
+                    .as_bytes(),
+                )?;
                 return Ok(());
             }
-            self.send(b"\x1bOB")?;
-            self.wait_for("menu selection", |screen| highlighted(screen) != current)?;
         }
-        anyhow::bail!("Menu command missing: {name}")
+        anyhow::bail!(
+            "Mouse target {label:?} missing: {}",
+            self.screen.screen_text()
+        )
+    }
+    fn command(&mut self, name: &str) -> Result<()> {
+        self.send(b"\x1bOP")?;
+        struct MenuView {
+            left: usize,
+            right: usize,
+            bottom: usize,
+            items: Vec<(usize, String)>,
+        }
+        let menu = |screen: &yy_term::Terminal| -> Option<MenuView> {
+            for y in 0..screen.rows() {
+                let text = screen.screen_row(y).text();
+                if let Some(at) = text.find("Commands: arrows") {
+                    let x = unicode_width::UnicodeWidthStr::width(&text[..at]).checked_sub(1)?;
+                    let row = screen.screen_row(y);
+                    let right = row
+                        .cells
+                        .iter()
+                        .enumerate()
+                        .skip(x + 1)
+                        .find(|(_, c)| c.text() == "┐")?
+                        .0;
+                    let bottom = (y + 1..screen.rows()).find(|r| {
+                        let row = screen.screen_row(*r);
+                        row.cells.get(x).is_some_and(|c| c.text() == "└")
+                            && row.cells.get(right).is_some_and(|c| c.text() == "┘")
+                    })?;
+                    let items = (y + 1..bottom)
+                        .map(|r| {
+                            let row = screen.screen_row(r);
+                            (
+                                r,
+                                row.cells
+                                    .iter()
+                                    .skip(x + 1)
+                                    .take(right - x - 1)
+                                    .map(|c| c.text())
+                                    .collect::<String>()
+                                    .trim()
+                                    .to_owned(),
+                            )
+                        })
+                        .collect();
+                    return Some(MenuView {
+                        left: x,
+                        right,
+                        bottom,
+                        items,
+                    });
+                }
+            }
+            None
+        };
+        self.wait_for("complete command menu", |s| menu(s).is_some())?;
+        let commands = yyterminal_editor::commands::COMMANDS;
+        ensure!(commands.contains(&name), "Unknown command: {name}");
+        let mut selected = 0usize;
+        for _ in 0..commands.len() {
+            let MenuView {
+                left: x,
+                right,
+                bottom,
+                items,
+            } = menu(&self.screen).context("Command menu disappeared")?;
+            if let Some((row, _)) = items.iter().find(|(_, label)| label == name) {
+                self.send(
+                    format!(
+                        "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+                        x + 2,
+                        row + 1,
+                        x + 2,
+                        row + 1
+                    )
+                    .as_bytes(),
+                )?;
+                return Ok(());
+            }
+            selected = (selected + 3).min(commands.len() - 1);
+            let expected = commands[selected];
+            self.send(
+                format!("\x1b[<65;{};{}M", (x + right) / 2 + 1, bottom.max(2) / 2).as_bytes(),
+            )?;
+            self.wait_for("command wheel selection applied", |s| {
+                menu(s).is_some_and(|view| {
+                    view.items.iter().any(|(row, label)| {
+                        label == expected
+                            && s.screen_row(*row)
+                                .cells
+                                .iter()
+                                .skip(view.left + 1)
+                                .take(view.right - view.left - 1)
+                                .any(|c| c.attr.bg == yy_term::Color::Indexed(4))
+                    })
+                })
+            })?;
+        }
+        anyhow::bail!(
+            "Menu command missing: {name}; {}",
+            self.screen.screen_text()
+        )
     }
     fn finish(&mut self) -> Result<()> {
         self.send(b"\x11")?;
@@ -463,6 +560,129 @@ fn standalone_interactive_preview_resizes_and_exits() -> Result<()> {
             .recv_timeout(Duration::from_millis(100))
         {
             app.screen.feed(&bytes);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn interactive_mouse_menu_folder_and_file_navigation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let child = dir.path().join("mouse-folder");
+    std::fs::create_dir(&child)?;
+    let path = dir.path().join("start.txt");
+    std::fs::write(&path, b"initial file\n")?;
+    std::fs::write(child.join("mouse-note.txt"), b"opened by mouse\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.click_text("Menu")?;
+    app.wait("Commands: arrows")?;
+    app.click_text("New file")?;
+    app.wait_for("new file selected", |s| {
+        let t = s.screen_text();
+        t.contains("[Untitled]") && !t.contains("Commands: arrows")
+    })?;
+    app.click_text("mouse-folder")?;
+    app.wait("mouse-note.txt")?;
+    app.click_text("mouse-note.txt")?;
+    app.wait("opened by mouse")?;
+    app.click_text("[..]")?;
+    app.wait("mouse-folder")?;
+    app.finish()
+}
+
+#[test]
+fn mouse_terminal_tabs_and_live_split_preview() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("note.md");
+    std::fs::write(&path, "# Sample\n\nsource paragraph\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.click_text("+Terminal")?;
+    app.wait("Terminal 2")?;
+    app.send(b"printf '\\102\\101\\103\\113\\107\\122\\117\\125\\116\\104\\n'\r")?;
+    app.click_text("[note.md]")?;
+    app.wait("# Sample")?;
+    app.click_text("Terminal 2")?;
+    app.wait("BACKGROUND")?;
+    let row = app.screen.screen_row(1).text();
+    let start = row.find("[Terminal 2]").context("Terminal tab missing")?;
+    let close = start
+        + row[start..]
+            .find(" x ")
+            .context("Close tab button missing")?
+        + 1;
+    app.send(format!("\x1b[<0;{};2M\x1b[<0;{};2m", close + 1, close + 1).as_bytes())?;
+    app.wait_for("terminal tab closed", |s| {
+        !s.screen_text().contains("Terminal 2") && s.screen_text().contains("# Sample")
+    })?;
+    app.click_text("Split")?;
+    app.wait_for("split preview ready", |s| {
+        let t = s.screen_text();
+        t.matches("Sample").count() >= 2 && !t.contains("Rendering Markdown")
+    })?;
+    app.click_text("# Sample")?;
+    app.send(b"LIVE ")?;
+    app.wait_for("live unsaved preview", |s| {
+        let t = s.screen_text();
+        t.matches("LIVE").count() >= 2 && !t.contains("Rendering Markdown")
+    })?;
+    ensure!(
+        !std::fs::read_to_string(&path)?.starts_with("LIVE"),
+        "Preview wrote unsaved edits"
+    );
+    app.command("Save")?;
+    app.wait("Saved")?;
+    ensure!(
+        std::fs::read_to_string(&path)?.starts_with("LIVE"),
+        "Mouse edit was not saved"
+    );
+    app.finish()
+}
+#[test]
+fn mouse_confirms_save_as_and_viewer_buttons_work() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("input.md");
+    std::fs::write(&path, b"# Original\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("Save as")?;
+    app.wait("Save as path")?;
+    app.send(b"copy.md")?;
+    app.wait("copy.md")?;
+    app.click_text("[OK]")?;
+    app.wait_for("mouse save confirmed", |s| {
+        let t = s.screen_text();
+        t.contains("Saved") && t.contains("[copy.md]") && !t.contains("[OK]")
+    })?;
+    ensure!(
+        std::fs::read(dir.path().join("copy.md"))? == b"# Original\n",
+        "Saved bytes changed"
+    );
+    app.finish()?;
+    let mut viewer = Harness::with_exe(&path, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    viewer.wait("Ready")?;
+    viewer.click_text("[Down]")?;
+    viewer.wait_for("mouse scrolled viewer", |s| {
+        !s.screen_text().contains("Original")
+    })?;
+    viewer.click_text("[Top]")?;
+    viewer.wait("Original")?;
+    viewer.click_text("[Close]")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = viewer.child.try_wait()? {
+            ensure!(status.success(), "Viewer mouse close failed");
+            break;
+        }
+        ensure!(Instant::now() < deadline, "Viewer did not close");
+        if let Ok(bytes) = viewer
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            viewer.screen.feed(&bytes);
         }
     }
     Ok(())

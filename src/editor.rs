@@ -10,6 +10,8 @@ use yy_core::{Document, OpenOptions, Selection, SelectionSet, Version};
 
 pub struct Editor {
     pub doc: Document,
+    pub terminal: Option<crate::shell::Shell>,
+    pub term_back: usize,
     pub raw: bool,
     pub spreadsheet: bool,
     pub book: Option<crate::workbook::Book>,
@@ -40,6 +42,8 @@ impl Editor {
     pub fn empty() -> Self {
         let doc = Document::new_empty();
         Self {
+            terminal: None,
+            term_back: 0,
             saved: doc.version(),
             doc,
             raw: false,
@@ -97,6 +101,8 @@ impl Editor {
             bail!("{error}");
         }
         Ok(Self {
+            terminal: None,
+            term_back: 0,
             saved: doc.version(),
             raw,
             spreadsheet: false,
@@ -123,6 +129,65 @@ impl Editor {
         };
         self.doc
             .set_selections(SelectionSet::single(Selection::new(anchor, offset)));
+    }
+    pub fn offset_at(&self, start: u64, end: u64, column: usize) -> u64 {
+        let snapshot = self.doc.snapshot();
+        let mut at = start;
+        let mut cells = 0;
+        while at < end {
+            let next = yy_core::motion::next_grapheme(snapshot, at);
+            let bytes = snapshot.read(at..next);
+            if bytes == b"\n" || bytes == b"\r" {
+                break;
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            let width = if text == "\t" {
+                4
+            } else {
+                unicode_width::UnicodeWidthStr::width(text.as_ref())
+            };
+            if cells + width > column {
+                break;
+            }
+            cells += width;
+            at = next;
+        }
+        at
+    }
+    pub fn scroll_rows(&mut self, down: bool, count: usize, width: usize) {
+        if down {
+            let rows = self.rows(count + 1, width);
+            if let Some(row) = rows.get(count).or_else(|| rows.last()) {
+                self.top = row.0;
+            }
+        } else {
+            for _ in 0..count {
+                let snapshot = self.doc.snapshot();
+                let mut p = self.top;
+                let mut cells = 0;
+                if p > 0 {
+                    let prev = yy_core::motion::prev_grapheme(snapshot, p);
+                    if snapshot.byte_at(prev) == Some(b'\n') {
+                        p = prev;
+                    }
+                }
+                while p > 0 && cells < width.max(1) {
+                    let prev = yy_core::motion::prev_grapheme(snapshot, p);
+                    if snapshot.byte_at(prev) == Some(b'\n') {
+                        break;
+                    }
+                    let bytes = snapshot.read(prev..p);
+                    let text = String::from_utf8_lossy(&bytes);
+                    cells += if text == "\t" {
+                        4
+                    } else {
+                        unicode_width::UnicodeWidthStr::width(text.as_ref())
+                    };
+                    p = prev;
+                }
+                self.top = p;
+            }
+        }
     }
     /// Bounded visual rows; even a single multi-gigabyte line never gets materialized.
     pub fn rows(&self, count: usize, width: usize) -> Vec<(u64, u64, String)> {

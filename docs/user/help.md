@@ -25,10 +25,13 @@ Git operations affect the explorer's current directory. Review staged
 changes before committing. Git, a shell, and a UTF-8 terminal are required.
 Fonts are controlled by your terminal; no font is included.
 
-Shell: input is sent to a real PTY. F1–F7, F10 and Ctrl+Q are reserved
+Shell tabs: input is sent to a real PTY. F1–F7, F10 and Ctrl+Q are reserved
 for the application. F2 returns to editing. Bracketed paste is supported.
 Shift+PageUp/PageDown scroll through 2,000 lines of shell history.
-Typing returns to the live screen. The app-owned shell is stopped on exit.
+Typing returns to the live screen. Terminal starts or selects a shell tab;
+New terminal / +Terminal creates another. Background tabs keep their output.
+Closing a terminal tab stops its app-owned shell; exiting stops all shells.
+Ctrl+Tab and Ctrl+W also switch/close terminal tabs.
 
 Files: opened on a worker into a private disk snapshot. Saving checks the
 original SHA-256 and refuses external changes. Save as refuses existing
@@ -107,7 +110,7 @@ encoded spaces. Corrupt separators/truncated records produce an error.
 Pages contain at most 128 records and 1 MiB of data, with up to 4096
 fields. A CSV record crossing the page byte budget is left untouched;
 use text mode if it is too large. Grid pages load on a worker. Column width and Row height commands adjust
-the byte-preserving grid uniformly for this session. Use Spreadsheet mode
+individual columns/rows of the byte-preserving grid for this session. Use Spreadsheet mode
 for individual columns/selected rows and persistent dimensions.
 See demo/README.md for ready-to-use CSV and packed-decimal examples.
 
@@ -250,3 +253,63 @@ Do not enable remote images if the document's URLs should not be contacted.
 
 See docs/user/markdown-viewer.md and demo/markdown-preview.md for examples,
 syntax coverage and the native renderer's differences from browser Mermaid.
+
+
+Mouse menu and explorer navigation
+----------------------------------
+Click Menu in the top bar to open commands; click a command to run it.
+Move over a menu item to highlight it, and use the wheel to reach commands
+below the visible area. Clicking outside the menu closes it without
+activating the item underneath. Esc still closes the menu.
+
+Click a folder once in Explorer to enter it; click [..] to go to its parent.
+Click a file once to open it in an editor tab. Wheel over Explorer moves
+through the list without opening entries. On narrow screens, click Files
+(or choose Explorer in the command menu) to show the file list.
+The other top-bar labels also respond to clicks. Right-click within the
+main content opens the command menu. Existing grid drag selection remains
+available. The terminal must forward mouse events (application mouse mode);
+terminal-native selection typically requires holding Shift.
+
+
+Mouse-first editing, tabs and split preview
+------------------------------------------
+The top bar uses names rather than function-key labels: Menu, Edit, Git,
+Terminal, +Terminal, Preview, Split, Files, Table. Function keys remain
+optional shortcuts. The tab strip below it contains documents and terminal
+tabs together. Click a tab to activate it, x to close it, and [<]/[>] to
+reach tabs outside the visible strip. Unsaved document tabs require saving
+before closing. Terminal tab closure terminates its shell, not just its view.
+
+Click in the text editor to place the caret; drag to select text. Positions
+respect Japanese/wide characters, combining graphemes and expanded tabs.
+Copy/Cut/Paste/Undo/Redo/Select all are also available in Menu. Copy/Paste
+uses the internal clipboard; Copy to system clipboard remains a separate
+OSC 52 operation. In a terminal tab, Copy copies the visible screen and
+Paste sends the internal clipboard; document Undo/Cut are not terminal actions.
+Keyboard Ctrl+C still sends interrupt to the focused shell.
+
+Input dialogs have [OK] and [Cancel] buttons. The unsaved-exit dialog has
+[Discard] for an explicit mouse confirmation. Text/numbers still need input;
+terminal-native paste can supply text. Buttons preserve the same validation
+as keyboard confirmation. Tab/menu clicks cannot bypass an active dialog.
+
+Wheel over text scrolls without moving the caret; over Preview/Help/Git/diff
+it scrolls those views, and over Terminal it moves through shell history.
+The grid supports dragging | in the column header to change column width,
+and _ at the bottom of a row-number gutter to change row height. Dimensions
+preview during dragging; release commits a single workbook undo operation.
+Workbook dimensions persist in .yys, while raw CSV/fixed-grid dimensions are
+session-only. Menu width/height commands remain available for exact values.
+
+Click Split (or Split Markdown preview in Menu) while a Markdown document
+is active to show its editor and preview together. The preview follows the
+unsaved document and has independent wheel scrolling. Click either pane to
+focus it. Split again or the preview's [x] closes the side pane; Preview/F5
+still offers the full preview. Narrow screens stack the panes vertically;
+very small screens show the editor until there is space for both.
+
+Standalone markdownViewer also captures mouse input. Wheel scrolls, and
+[Close], [Up], [Down], [Top], [End], [<], [>] provide clickable navigation.
+Terminal-native text selection generally uses Shift while mouse capture is
+active. Terminal emulators must forward mouse events to support these actions.

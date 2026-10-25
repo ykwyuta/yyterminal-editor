@@ -60,6 +60,8 @@ pub struct Grid {
     pub anchor: Option<(usize, usize)>,
     pub width: u16,
     pub height: u16,
+    pub widths: std::collections::BTreeMap<usize, u16>,
+    pub heights: std::collections::BTreeMap<u64, u16>,
     pub col: usize,
     pub left: usize,
     pub top: usize,
@@ -77,11 +79,22 @@ impl Grid {
             anchor: None,
             width: 19,
             height: 1,
+            widths: Default::default(),
+            heights: Default::default(),
             col: 0,
             left: 0,
             top: 0,
             history: vec![],
         }
+    }
+    pub fn column_width(&self, col: usize) -> u16 {
+        self.widths.get(&col).copied().unwrap_or(self.width)
+    }
+    pub fn row_height(&self, row: usize) -> u16 {
+        self.heights
+            .get(&(self.base + row as u64))
+            .copied()
+            .unwrap_or(self.height)
     }
     pub fn rectangle(&self) -> (usize, usize, usize, usize) {
         let (r, c) = self.anchor.unwrap_or((self.row, self.col));
