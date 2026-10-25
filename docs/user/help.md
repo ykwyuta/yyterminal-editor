@@ -475,3 +475,15 @@ paragraph separation. Nested list lines and blank lines inside code are
 preserved. Separators are deferred until the next block, avoiding extra
 leading/trailing blank rows or doubled block margins. This affects previews
 and markdownViewer output only, and never modifies the Markdown source.
+
+
+Markdown hierarchy / 見出し・リストの階層
+----------------------------------------
+H1 uses a double-line box; H2 a single-line box. H3/H4 have heavy/thin
+underlines, H5 a vertical bar, and H6 a dotted prefix. Each level has its
+own color. Long headings wrap; narrow panes replace boxes with underlines.
+Ordered lists keep their starting number. Nested bullets cycle through
+• / ◦ / ▪. Wrapped lines and subsequent paragraphs use hanging indents.
+Tasks show green [x] or yellow [ ]. Bold, italic, strikethrough, underlined
+links and colored inline code distinguish important text. Shapes remain
+visible in --plain output; source files are never modified by decoration.

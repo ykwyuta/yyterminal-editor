@@ -1,7 +1,7 @@
 //! Shared Markdown renderer for yyte and markdownViewer.
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
-use pulldown_cmark::{CodeBlockKind, Event, Options as MdOptions, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options as MdOptions, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -62,6 +62,12 @@ pub(crate) struct Output {
     limit: usize,
     clipped: bool,
     block_gap: bool,
+    items: Vec<ListItem>,
+}
+struct ListItem {
+    prefix: String,
+    first: bool,
+    style: Style,
 }
 impl Output {
     fn new(width: u16, limit: usize) -> Self {
@@ -71,6 +77,7 @@ impl Output {
             limit,
             clipped: false,
             block_gap: false,
+            items: vec![],
         }
     }
     pub(crate) fn full(&self) -> bool {
@@ -101,9 +108,40 @@ impl Output {
     }
     fn push(&mut self, line: Line<'static>) {
         self.before_content();
-        let (wrapped, clipped) = crate::preview_layout::wrap(line, self.width, self.remaining());
-        self.lines.extend(wrapped);
-        self.clipped |= clipped;
+        if let Some(item) = self.items.last_mut() {
+            // Reserve a hanging indent for every wrapped/continuation line.
+            let prefix_width = item
+                .prefix
+                .chars()
+                .count()
+                .min(self.width.saturating_sub(2));
+            let prefix = item
+                .prefix
+                .chars()
+                .skip(item.prefix.chars().count() - prefix_width)
+                .collect::<String>();
+            let (wrapped, clipped) = crate::preview_layout::wrap(
+                line,
+                self.width - prefix_width,
+                self.limit.saturating_sub(self.lines.len()),
+            );
+            self.clipped |= clipped;
+            for row in wrapped {
+                let marker = if std::mem::take(&mut item.first) {
+                    prefix.clone()
+                } else {
+                    " ".repeat(prefix_width)
+                };
+                let mut spans = vec![Span::styled(marker, item.style)];
+                spans.extend(row.spans);
+                self.lines.push(Line::from(spans));
+            }
+        } else {
+            let (wrapped, clipped) =
+                crate::preview_layout::wrap(line, self.width, self.remaining());
+            self.lines.extend(wrapped);
+            self.clipped |= clipped;
+        }
     }
     pub(crate) fn grid(&mut self, line: Line<'static>) {
         self.before_content();
@@ -121,6 +159,84 @@ impl Output {
             }
             self.push(line);
         }
+    }
+    fn heading(&mut self, level: HeadingLevel, spans: Vec<Span<'static>>) {
+        self.before_content();
+        let color = match level {
+            HeadingLevel::H1 => Color::Cyan,
+            HeadingLevel::H2 => Color::Blue,
+            HeadingLevel::H3 => Color::Green,
+            HeadingLevel::H4 => Color::Yellow,
+            HeadingLevel::H5 => Color::Magenta,
+            HeadingLevel::H6 => Color::Gray,
+        };
+        let mut style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        if level == HeadingLevel::H6 {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        let line = Line::from(
+            spans
+                .into_iter()
+                .map(|mut span| {
+                    span.style = style.patch(span.style);
+                    span
+                })
+                .collect::<Vec<_>>(),
+        );
+        // Keep at least two cells for a full-width grapheme inside decorations.
+        let boxed = self.width >= 6 && matches!(level, HeadingLevel::H1 | HeadingLevel::H2);
+        let prefix = if self.width >= 5 {
+            match level {
+                HeadingLevel::H5 => "▎ ",
+                HeadingLevel::H6 => "·· ",
+                _ => "",
+            }
+        } else {
+            ""
+        };
+        let overhead = if boxed { 4 } else { prefix.chars().count() };
+        let (rows, clipped) = crate::preview_layout::wrap(
+            line,
+            self.width.saturating_sub(overhead).max(1),
+            self.remaining(),
+        );
+        self.clipped |= clipped;
+        let content_width = rows.iter().map(Line::width).max().unwrap_or(0);
+        if boxed {
+            let (tl, tr, bl, br, horizontal, vertical) = if level == HeadingLevel::H1 {
+                ('╔', '╗', '╚', '╝', '═', '║')
+            } else {
+                ('┌', '┐', '└', '┘', '─', '│')
+            };
+            let rule = horizontal.to_string().repeat(content_width + 2);
+            self.grid(Line::styled(format!("{tl}{rule}{tr}"), style));
+            for row in rows {
+                let padding = " ".repeat(content_width.saturating_sub(row.width()));
+                let mut spans = vec![Span::styled(format!("{vertical} "), style)];
+                spans.extend(row.spans);
+                spans.push(Span::styled(format!("{padding} {vertical}"), style));
+                self.grid(Line::from(spans));
+            }
+            self.grid(Line::styled(format!("{bl}{rule}{br}"), style));
+        } else {
+            for row in rows {
+                let mut spans = vec![Span::styled(prefix, style)];
+                spans.extend(row.spans);
+                self.grid(Line::from(spans));
+            }
+            if matches!(
+                level,
+                HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3 | HeadingLevel::H4
+            ) {
+                let symbol = if matches!(level, HeadingLevel::H1 | HeadingLevel::H3) {
+                    "━"
+                } else {
+                    "─"
+                };
+                self.grid(Line::styled(symbol.repeat(content_width), style));
+            }
+        }
+        self.separate();
     }
     fn finish(mut self) -> Rendered {
         if self.clipped {
@@ -292,12 +408,13 @@ fn render_limited(
     let mut lines = Output::new(opts.width, max_lines);
     let mut table: Option<crate::preview_table::Table> = None;
     let mut spans = vec![];
-    let mut heading = false;
+    let mut heading = None;
     let mut code: Option<(String, String)> = None;
     let mut image: Option<(String, String)> = None;
     let mut cache: HashMap<String, Vec<Line<'static>>> = HashMap::new();
     let mut image_count = 0usize;
-    let mut list_depth = 0usize;
+    let mut lists: Vec<Option<u64>> = vec![];
+    let mut inline_styles = vec![Style::default()];
     let mut end = markdown.len().min(max_markdown);
     while !markdown.is_char_boundary(end) {
         end -= 1;
@@ -391,53 +508,97 @@ fn render_limited(
                 }
             }
             Event::Start(Tag::Paragraph) => lines.separate(),
-            Event::Start(Tag::Heading { .. }) => {
+            Event::Start(Tag::Heading { level, .. }) => {
                 lines.separate();
-                heading = true;
+                heading = Some(level);
             }
-            Event::Start(Tag::List(_)) => {
+            Event::Start(Tag::List(start)) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
-                if list_depth == 0 {
+                if lists.is_empty() {
                     lines.separate();
                 }
-                list_depth += 1;
+                lists.push(start);
             }
             Event::End(TagEnd::List(_)) => {
-                list_depth = list_depth.saturating_sub(1);
-                if list_depth == 0 {
+                lists.pop();
+                if lists.is_empty() {
                     lines.separate();
                 }
             }
-            Event::Start(Tag::Item) => spans.push(Span::raw(format!(
-                "{}* ",
-                "  ".repeat(list_depth.saturating_sub(1).min(16))
-            ))),
-            Event::Text(t) => spans.push(Span::styled(
-                text(&t),
-                if heading {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+            Event::Start(Tag::Item) => {
+                let depth = lists.len().saturating_sub(1);
+                let marker = if let Some(Some(number)) = lists.last_mut() {
+                    let marker = format!("{number}. ");
+                    *number = number.saturating_add(1);
+                    marker
                 } else {
-                    Style::default()
-                },
+                    format!("{} ", ["•", "◦", "▪"][depth % 3])
+                };
+                lines.items.push(ListItem {
+                    prefix: format!("{}{marker}", "  ".repeat(depth.min(16))),
+                    first: true,
+                    style: Style::default().fg(Color::Cyan),
+                });
+            }
+            Event::Start(
+                tag @ (Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }),
+            ) => {
+                let added = match tag {
+                    Tag::Strong => Style::default().add_modifier(Modifier::BOLD),
+                    Tag::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
+                    Tag::Strikethrough => Style::default().add_modifier(Modifier::CROSSED_OUT),
+                    _ => Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::UNDERLINED),
+                };
+                inline_styles.push(
+                    inline_styles
+                        .last()
+                        .copied()
+                        .unwrap_or_default()
+                        .patch(added),
+                );
+            }
+            Event::End(
+                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
+            ) => {
+                if inline_styles.len() > 1 {
+                    inline_styles.pop();
+                }
+            }
+            Event::Text(t) => spans.push(Span::styled(text(&t), *inline_styles.last().unwrap())),
+            Event::Code(t) => spans.push(Span::styled(
+                text(&t),
+                inline_styles
+                    .last()
+                    .unwrap()
+                    .patch(Style::default().fg(Color::Yellow)),
             )),
-            Event::Code(t) => {
-                spans.push(Span::styled(text(&t), Style::default().fg(Color::Yellow)))
-            }
             Event::SoftBreak | Event::HardBreak => {
-                lines.push(Line::from(std::mem::take(&mut spans)))
+                if heading.is_some() {
+                    spans.push(Span::raw(" "));
+                } else {
+                    lines.push(Line::from(std::mem::take(&mut spans)));
+                }
             }
-            Event::End(end @ (TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item)) => {
+            Event::End(TagEnd::Heading(level)) => {
+                lines.heading(level, std::mem::take(&mut spans));
+                heading = None;
+            }
+            Event::End(end @ (TagEnd::Paragraph | TagEnd::Item)) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
-                if matches!(end, TagEnd::Heading(_)) || end == TagEnd::Paragraph {
+                if end == TagEnd::Paragraph {
                     lines.separate();
+                } else {
+                    if lines.items.last().is_some_and(|item| item.first) {
+                        lines.push(Line::default());
+                    }
+                    lines.items.pop();
                 }
-                heading = false;
             }
             Event::Rule => {
                 lines.separate();
@@ -445,7 +606,26 @@ fn render_limited(
                 lines.separate();
             }
             Event::TaskListMarker(done) => {
-                spans.push(Span::raw(if done { "[x] " } else { "[ ] " }))
+                if let Some(item) = lines.items.last_mut() {
+                    let indent = item.prefix.len() - item.prefix.trim_start().len();
+                    if item
+                        .prefix
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit())
+                    {
+                        item.prefix.push_str(if done { "[x] " } else { "[ ] " });
+                    } else {
+                        item.prefix = format!(
+                            "{}{}",
+                            " ".repeat(indent),
+                            if done { "[x] " } else { "[ ] " }
+                        );
+                    }
+                    item.style =
+                        Style::default().fg(if done { Color::Green } else { Color::Yellow });
+                }
             }
             Event::Html(t) | Event::InlineHtml(t) => spans.push(Span::styled(
                 format!("[HTML: {}]", text(&t)),
@@ -714,11 +894,11 @@ mod tests {
         let rendered = render(source, &Options::new(PathBuf::from("."), 80));
         assert_eq!(
             rendered.plain(),
-            "Heading\n\nFirst paragraph.\n\n* one\n* two\n\nSecond paragraph.\n\nThird paragraph.\n\nNext heading\n\nLast paragraph."
+            "╔═════════╗\n║ Heading ║\n╚═════════╝\n\nFirst paragraph.\n\n• one\n• two\n\nSecond paragraph.\n\nThird paragraph.\n\n┌──────────────┐\n│ Next heading │\n└──────────────┘\n\nLast paragraph."
         );
         assert_eq!(
             render("# One\n## Two\n", &Options::new(PathBuf::from("."), 80)).plain(),
-            "One\n\nTwo"
+            "╔═════╗\n║ One ║\n╚═════╝\n\n┌─────┐\n│ Two │\n└─────┘"
         );
     }
     #[test]
@@ -727,7 +907,7 @@ mod tests {
         let text = render(source, &Options::new(PathBuf::from("."), 80)).plain();
         assert_eq!(
             text,
-            "Before\ncontinued\n\n* parent\n  * child\n* sibling\n\nalpha\n\nbeta\n\nAfter"
+            "Before\ncontinued\n\n• parent\n  ◦ child\n• sibling\n\nalpha\n\nbeta\n\nAfter"
         );
         assert!(!text.contains("\n\n\n"));
         assert_eq!(
@@ -736,7 +916,7 @@ mod tests {
                 &Options::new(PathBuf::from("."), 80)
             )
             .plain(),
-            "* one\n\n* two\n\nAfter"
+            "• one\n\n• two\n\nAfter"
         );
         let bounded = render_limited(
             "one\n\ntwo\n\nthree",
@@ -753,6 +933,128 @@ mod tests {
                 .to_string()
                 .contains("line limit")
         );
+    }
+    #[test]
+    fn six_heading_levels_have_distinct_geometry_and_restore_body_style() {
+        let source = "# One\n## Two\n### Three\n#### Four\n##### Five\n###### Six\n\nordinary";
+        let result = render(source, &Options::new(PathBuf::from("."), 30));
+        let plain = result.plain();
+        for expected in [
+            "╔═════╗\n║ One ║\n╚═════╝",
+            "┌─────┐\n│ Two │\n└─────┘",
+            "Three\n━━━━━",
+            "Four\n────",
+            "▎ Five",
+            "·· Six",
+        ] {
+            assert!(plain.contains(expected), "missing {expected:?}: {plain}");
+        }
+        let colors = [
+            Color::Cyan,
+            Color::Blue,
+            Color::Green,
+            Color::Yellow,
+            Color::Magenta,
+            Color::Gray,
+        ];
+        for (title, color) in ["One", "Two", "Three", "Four", "Five", "Six"]
+            .into_iter()
+            .zip(colors)
+        {
+            let span = result
+                .lines
+                .iter()
+                .flat_map(|r| &r.spans)
+                .find(|s| s.content == title)
+                .unwrap();
+            assert_eq!(span.style.fg, Some(color));
+            assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        }
+        assert_eq!(
+            result.lines.last().unwrap().spans.last().unwrap().style,
+            Style::default()
+        );
+    }
+    #[test]
+    fn heading_boxes_wrap_wide_graphemes_and_respect_narrow_width_and_row_budget() {
+        let title = "日本語e\u{301}👩‍💻長い見出し";
+        for width in 2..=32 {
+            for level in 1..=6 {
+                let source = format!("{} {title}\n\nBody", "#".repeat(level));
+                let rendered = render(&source, &Options::new(PathBuf::from("."), width));
+                assert!(
+                    rendered
+                        .lines
+                        .iter()
+                        .all(|r| r.width() <= usize::from(width)),
+                    "width {width}, level {level}: {}",
+                    rendered.plain()
+                );
+                assert!(rendered.plain().contains("e\u{301}"));
+                assert!(rendered.plain().contains("👩‍💻"));
+                assert!(!rendered.plain().contains('�'));
+                let bounded = render_limited(
+                    &source,
+                    &Options::new(PathBuf::from("."), width),
+                    MAX_MARKDOWN,
+                    2,
+                );
+                assert!(bounded.lines.len() <= 3);
+                assert!(bounded.plain().contains("line limit"));
+            }
+        }
+    }
+    #[test]
+    fn lists_keep_numbers_nested_markers_checkboxes_and_hanging_indents() {
+        let source = "9. nine\n10. ten\n    - child\n      - deep\n11. eleven\n\n- [x] done\n- [ ] pending\n\nAfter";
+        let result = render(source, &Options::new(PathBuf::from("."), 40));
+        assert_eq!(
+            result.plain(),
+            "9. nine\n10. ten\n  ◦ child\n    ▪ deep\n11. eleven\n\n[x] done\n[ ] pending\n\nAfter"
+        );
+        for (label, color) in [("[x] ", Color::Green), ("[ ] ", Color::Yellow)] {
+            assert!(
+                result
+                    .lines
+                    .iter()
+                    .flat_map(|r| &r.spans)
+                    .any(|s| s.content == label && s.style.fg == Some(color))
+            );
+        }
+        let wrapped = render(
+            "- abcdefghijklmnop\n  continued\n\n  another paragraph\n",
+            &Options::new(PathBuf::from("."), 10),
+        );
+        assert_eq!(
+            wrapped.plain(),
+            "• abcdefgh\n  ijklmnop\n  continue\n  d\n\n  another \n  paragrap\n  h"
+        );
+        assert!(wrapped.lines.iter().all(|r| r.width() <= 10));
+        let narrow = render(source, &Options::new(PathBuf::from("."), 4));
+        assert!(narrow.lines.iter().all(|r| r.width() <= 4));
+    }
+    #[test]
+    fn inline_emphasis_links_and_code_compose_and_do_not_leak() {
+        let result = render(
+            "**bold *both* end** plain [link](https://example.com) ~~gone~~ `code`",
+            &Options::new(PathBuf::from("."), 100),
+        );
+        let spans = result
+            .lines
+            .iter()
+            .flat_map(|r| &r.spans)
+            .collect::<Vec<_>>();
+        let style = |text: &str| spans.iter().find(|s| s.content == text).unwrap().style;
+        assert!(
+            style("both")
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::ITALIC)
+        );
+        assert!(style("link").add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(style("link").fg, Some(Color::Cyan));
+        assert!(style("gone").add_modifier.contains(Modifier::CROSSED_OUT));
+        assert_eq!(style("code").fg, Some(Color::Yellow));
+        assert_eq!(style(" plain "), Style::default());
     }
     #[test]
     fn controls_limits_and_unclosed_fences_are_safe() {

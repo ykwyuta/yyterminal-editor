@@ -24,6 +24,14 @@ fn standalone_plain_color_and_stdin_share_rendering() -> Result<()> {
         "検証",
         "Open Markdown",
         "customer_id FK",
+        "║ Terminal Markdown preview ║",
+        "9. Numbering can start at nine.",
+        "◦ A nested bullet",
+        "▪ A deeper bullet",
+        "[x] Finished task",
+        "[ ] Pending task",
+        "▎ Detail with a vertical marker",
+        "·· Smallest heading",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }

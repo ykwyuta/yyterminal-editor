@@ -75,3 +75,25 @@ SELECT customer_id, 'active' AS status
 FROM customers
 WHERE customer_id >= 42; -- SQL keyword, string and number
 ```
+
+
+## Readable hierarchy
+
+### Section with a heavy underline
+
+#### Subsection with a thin underline
+
+##### Detail with a vertical marker
+
+###### Smallest heading
+
+**Important**, *emphasized*, ~~obsolete~~, [help](../docs/user/help.md), and `inline code`.
+
+9. Numbering can start at nine.
+10. A long item wraps below its text rather than below its number when the preview pane is narrow.
+    - A nested bullet
+      - A deeper bullet
+11. The parent numbering continues.
+
+- [x] Finished task
+- [ ] Pending task

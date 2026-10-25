@@ -442,7 +442,29 @@ fn interactive_preview_renders_local_pixels_and_mermaid() -> Result<()> {
     app.send(b"\x1b[15~")?;
     app.wait("Markdown preview ready")?;
     app.wait("Image: Pixel house")?;
-    app.send(b"\x1b[6~")?;
+    let frame = (0..app.screen.rows())
+        .map(|row| app.screen.screen_row(row).text())
+        .find(|row| row.contains("┌Markdown preview"))
+        .context("Preview frame missing")?;
+    let at = frame.find("┌Markdown preview").unwrap();
+    let left = unicode_width::UnicodeWidthStr::width(&frame[..at]);
+    let width = app
+        .screen
+        .screen_row(0)
+        .cells
+        .len()
+        .saturating_sub(left + 2);
+    let rendered = yyterminal_editor::preview::render(
+        &std::fs::read_to_string(&path)?,
+        &yyterminal_editor::preview::Options::new(path.parent().unwrap().to_owned(), width as u16),
+    );
+    let target = rendered
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("Connections:"))
+        .context("Demo diagram has no connections")?;
+    // Decoration and image height determine the row; a fixed page count does not.
+    app.send("\x1b[B".repeat(target).as_bytes())?;
     app.wait("Connections:")?;
     app.send(b"\x1bOQ")?;
     app.wait("Terminal Markdown preview")?;
@@ -846,10 +868,10 @@ fn preview_block_spacing_is_visible_in_editor_and_standalone_viewer() -> Result<
         let Some(first) = find("FIRST_PARAGRAPH") else {
             return false;
         };
-        let Some(one) = find("* LIST_ONE") else {
+        let Some(one) = find("• LIST_ONE") else {
             return false;
         };
-        let Some(two) = find("* LIST_TWO") else {
+        let Some(two) = find("• LIST_TWO") else {
             return false;
         };
         let Some(after) = find("AFTER_LIST") else {
@@ -858,12 +880,16 @@ fn preview_block_spacing_is_visible_in_editor_and_standalone_viewer() -> Result<
         let Some(last) = find("LAST_PARAGRAPH") else {
             return false;
         };
-        first == title + 2
+        title > 0
+            && first == title + 3
             && one == first + 2
             && two == one + 1
             && after == two + 2
             && last == after + 2
-            && [title, first, two, after].iter().all(|row| blank(row + 1))
+            && blank(title + 2)
+            && rows[title - 1].contains('╔')
+            && rows[title + 1].contains('╚')
+            && [first, two, after].iter().all(|row| blank(row + 1))
     };
     let mut app = Harness::new(&path)?;
     app.wait("Opened")?;
