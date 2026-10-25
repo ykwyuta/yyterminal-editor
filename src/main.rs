@@ -26,7 +26,9 @@ const HELP: &str = concat!(
     "\n\n",
     include_str!("../docs/user/database.md")
 );
-use yyterminal_editor::commands::{COMMANDS, Language, MENUS, OPEN_MODES, label};
+use yyterminal_editor::commands::{
+    COMMANDS, DATABASE_MENUS, Language, MENUS, Menu, OPEN_MODES, label,
+};
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Editor,
@@ -256,6 +258,23 @@ impl App {
         app.read_dir(app.root.clone());
         app
     }
+    fn menu(&self, group: usize) -> &'static Menu {
+        if group < MENUS.len() {
+            &MENUS[group]
+        } else {
+            &DATABASE_MENUS[group - MENUS.len()]
+        }
+    }
+    fn adjacent_menu(&mut self, forward: bool) {
+        let group = self.menu_group.unwrap();
+        let (start, len) = if group < MENUS.len() {
+            (0, MENUS.len())
+        } else {
+            (MENUS.len(), DATABASE_MENUS.len())
+        };
+        let step = if forward { 1 } else { len - 1 };
+        self.show_menu(start + (group - start + step) % len);
+    }
     fn menu_commands(&self) -> &'static [&'static str] {
         if self.db.as_ref().is_some_and(|d| d.type_menu) {
             return self.db_type_choices();
@@ -263,7 +282,7 @@ impl App {
         if self.context_path.is_some() {
             OPEN_MODES
         } else if let Some(group) = self.menu_group {
-            MENUS[group].commands
+            self.menu(group).commands
         } else {
             COMMANDS
         }
@@ -2106,12 +2125,8 @@ impl App {
         if let Some(selected) = self.palette {
             match key.code {
                 K::Esc => self.close_menu(),
-                K::Right if self.menu_group.is_some() => {
-                    self.show_menu((self.menu_group.unwrap() + 1) % MENUS.len())
-                }
-                K::Left if self.menu_group.is_some() => {
-                    self.show_menu((self.menu_group.unwrap() + MENUS.len() - 1) % MENUS.len())
-                }
+                K::Right if self.menu_group.is_some() => self.adjacent_menu(true),
+                K::Left if self.menu_group.is_some() => self.adjacent_menu(false),
                 K::Down => self.palette = Some((selected + 1) % self.menu_commands().len()),
                 K::Up => {
                     self.palette = Some(
@@ -2128,7 +2143,11 @@ impl App {
         }
         match key.code {
             K::F(10) => {
-                self.show_menu(0);
+                self.show_menu(if self.view == View::Database {
+                    MENUS.len()
+                } else {
+                    0
+                });
                 return;
             }
             K::F(1) => {
@@ -2681,6 +2700,65 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn database_menus_stay_inside_management_view() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut app = App::new(dir.path().to_owned());
+        let view = MENUS.iter().position(|m| m.name == "View").unwrap();
+        app.show_menu(view);
+        let manager = app
+            .menu_commands()
+            .iter()
+            .position(|c| *c == "DB Manager")
+            .unwrap();
+        assert_eq!(
+            label("DB Manager", Language::English),
+            "Database Management"
+        );
+        app.run_menu(manager);
+        assert!(app.view == View::Database);
+        for language in [Language::English, Language::Japanese] {
+            app.language = language;
+            for (width, height) in [(1, 1), (20, 6), (60, 18), (120, 32)] {
+                app.close_menu();
+                render_mouse(&mut app, width, height)?;
+                for (rect, action) in &app.mouse_actions {
+                    if matches!(action, MouseAction::Menu(group) if *group >= MENUS.len()) {
+                        assert!(app.content_area.contains((rect.x, rect.y).into()));
+                        assert!(rect.right() <= app.content_area.right());
+                    }
+                }
+                app.key(KeyEvent::new(K::F(10), M::NONE));
+                assert_eq!(app.menu_group, Some(MENUS.len()));
+                for index in 0..DATABASE_MENUS.len() {
+                    assert_eq!(app.menu_group, Some(MENUS.len() + index));
+                    render_mouse(&mut app, width, height)?;
+                    assert!(app.palette_area.right() <= app.content_area.right());
+                    assert!(app.palette_area.bottom() <= app.content_area.bottom());
+                    app.key(KeyEvent::new(K::Right, M::NONE));
+                }
+                assert_eq!(app.menu_group, Some(MENUS.len()));
+                app.key(KeyEvent::new(K::Left, M::NONE));
+                assert_eq!(app.menu_group, Some(MENUS.len() + DATABASE_MENUS.len() - 1));
+                app.key(KeyEvent::new(K::Esc, M::NONE));
+            }
+        }
+        app.language = Language::English;
+        render_mouse(&mut app, 120, 32)?;
+        let sql = app
+            .mouse_actions
+            .iter()
+            .find(|(_, a)| matches!(a, MouseAction::Menu(i) if *i == MENUS.len() + 1))
+            .unwrap()
+            .0;
+        click(&mut app, sql);
+        render_mouse(&mut app, 120, 32)?;
+        let query = app.mouse_actions.iter().find(|(_, a)| matches!(a, MouseAction::Command(i) if app.menu_commands()[*i] == "DB Query")).unwrap().0;
+        click(&mut app, query);
+        assert!(app.palette.is_none());
+        assert!(app.view == View::Database);
+        Ok(())
+    }
     #[test]
     fn all_views_render_at_small_sizes() -> Result<()> {
         for (width, height) in [(1, 1), (20, 6), (80, 24), (160, 48)] {

@@ -179,6 +179,7 @@ pub const MENUS: &[Menu] = &[
         japanese: "表示",
         commands: &[
             "Explorer",
+            "DB Manager",
             "Syntax language",
             "Folder tree",
             "Folder navigation",
@@ -253,12 +254,15 @@ pub const MENUS: &[Menu] = &[
         japanese: "ヘルプ",
         commands: &["Help"],
     },
+];
+
+/// Menus available inside the database management view.
+pub const DATABASE_MENUS: &[Menu] = &[
     Menu {
         name: "Database",
         japanese: "データベース",
         commands: &[
             "DB Edit connection",
-            "DB Manager",
             "DB New connection",
             "DB Select connection",
             "DB Delete connection",
@@ -350,7 +354,11 @@ pub const OPEN_MODES: &[&str] = &[
 ];
 pub fn label(command: &str, language: Language) -> &str {
     if language == Language::English {
-        return command;
+        return if command == "DB Manager" {
+            "Database Management"
+        } else {
+            command
+        };
     }
     match command {
         "DB ER SVG" => "ERをSVG出力",
@@ -495,7 +503,10 @@ mod tests {
     fn menus_cover_commands_and_both_languages() {
         for command in COMMANDS {
             assert!(
-                MENUS.iter().any(|menu| menu.commands.contains(command))
+                MENUS
+                    .iter()
+                    .chain(DATABASE_MENUS)
+                    .any(|menu| menu.commands.contains(command))
                     || OPEN_MODES.contains(command),
                 "Unclassified: {command}"
             );
@@ -508,7 +519,7 @@ mod tests {
         for command in OPEN_MODES {
             assert_ne!(label(command, Language::Japanese), *command);
         }
-        for menu in MENUS {
+        for menu in MENUS.iter().chain(DATABASE_MENUS) {
             for command in menu.commands {
                 assert!(COMMANDS.contains(command));
             }

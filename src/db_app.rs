@@ -1207,9 +1207,7 @@ impl App {
         if event.kind == E::Down(B::Right)
             && self.content_area.contains((event.column, event.row).into())
         {
-            if let Some(i) = database_menu_index() {
-                self.show_menu(i);
-            }
+            self.show_menu(crate::MENUS.len());
             return true;
         }
         if matches!(event.kind, E::ScrollLeft | E::ScrollRight) {
@@ -1325,53 +1323,63 @@ impl App {
         true
     }
 }
-fn database_menu_index() -> Option<usize> {
-    crate::MENUS.iter().position(|m| m.name == "Database")
-}
 fn border(title: impl Into<String>) -> Block<'static> {
     Block::bordered()
         .title(title.into())
         .border_style(Style::default().fg(Color::DarkGray))
-}
-fn button(frame: &mut Frame, app: &mut App, area: Rect, text: &str, command: &'static str) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(Color::Cyan)),
-        area,
-    );
-    app.mouse_actions.push((area, MouseAction::Run(command)));
 }
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     app.ensure_db();
     app.preview_area = Rect::default();
     app.preview_focus = app.db.as_ref().unwrap().result_focus;
     app.editor_area = Rect::default();
-    let [tools, body] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
-    let mut x = tools.x;
-    let mut y = tools.y;
-    for (text, cmd) in [
-        ("[Connect]", "DB Connect"),
-        ("[SQL]", "DB Query"),
-        ("[Run]", "DB Execute"),
-        ("[Stop]", "DB Cancel"),
-        ("[Estimated]", "DB Estimated plan"),
-        ("[Actual: executes SQL]", "DB Actual plan"),
-        ("[Results]", "DB Results"),
-        ("[Plan]", "DB Plan"),
-        ("[ER]", "DB ER"),
-        ("[Messages]", "DB Messages"),
-    ] {
-        let w = (text.len() + 1).min(tools.width as usize) as u16;
-        if x + w > tools.right() {
+    use unicode_width::UnicodeWidthStr;
+    let names: Vec<_> = crate::DATABASE_MENUS
+        .iter()
+        .map(|menu| {
+            if app.language == crate::Language::Japanese {
+                menu.japanese
+            } else {
+                menu.name
+            }
+        })
+        .collect();
+    let mut rows = 1;
+    let mut used = 0;
+    for name in &names {
+        let width = (name.width() as u16 + 2).min(area.width);
+        if used + width > area.width {
+            rows += 1;
+            used = 0;
+        }
+        used += width;
+    }
+    let [tools, body] =
+        Layout::vertical([Constraint::Length(rows), Constraint::Min(0)]).areas(area);
+    let (mut x, mut y) = (tools.x, tools.y);
+    for (index, name) in names.iter().enumerate() {
+        let width = (name.width() as u16 + 2).min(tools.width);
+        if x + width > tools.right() {
             x = tools.x;
             y += 1;
         }
-        if y < tools.bottom() {
-            button(frame, app, Rect::new(x, y, w, 1), text, cmd);
+        if y < tools.bottom() && width > 0 {
+            let rect = Rect::new(x, y, width, 1);
+            let group = crate::MENUS.len() + index;
+            let style = Style::default().fg(Color::Cyan);
+            frame.render_widget(
+                Paragraph::new(*name).style(
+                    if app.palette.is_some() && app.menu_group == Some(group) {
+                        style.add_modifier(Modifier::REVERSED)
+                    } else {
+                        style
+                    },
+                ),
+                rect,
+            );
+            app.mouse_actions.push((rect, MouseAction::Menu(group)));
         }
-        x += w;
+        x += width;
     }
     let [tree, content] = if body.width >= 64 {
         Layout::horizontal([Constraint::Length(26), Constraint::Min(0)]).areas(body)

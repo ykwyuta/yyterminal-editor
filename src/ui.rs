@@ -191,7 +191,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         View::Diff => "yymerge comparison",
         View::Preview => "Markdown preview",
         View::Help => "Help",
-        View::Database => "Database",
+        View::Database => "Database Management",
     };
     let border = block(title, !app.explorer);
     let inner = border.inner(right);
@@ -306,12 +306,18 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             5
         };
-        let w = frame.area().width.saturating_sub(4).min(72);
+        let bounds = if app.menu_group.is_some_and(|group| group >= MENUS.len()) {
+            block("", false).inner(app.content_area)
+        } else {
+            frame.area()
+        };
+        let h = h.min(bounds.height);
+        let w = bounds.width.saturating_sub(4).min(72);
         let rect = Rect::new(
-            frame.area().width.saturating_sub(w) / 2,
-            frame.area().height.saturating_sub(h) / 2,
+            bounds.x + bounds.width.saturating_sub(w) / 2,
+            bounds.y + bounds.height.saturating_sub(h) / 2,
             w,
-            h.min(frame.area().height),
+            h,
         );
         app.palette_area = rect;
         frame.render_widget(Clear, rect);
@@ -340,9 +346,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                         }
                     } else if let Some(group) = app.menu_group {
                         if app.language == Language::Japanese {
-                            MENUS[group].japanese
+                            app.menu(group).japanese
                         } else {
-                            MENUS[group].name
+                            app.menu(group).name
                         }
                     } else if app.language == Language::Japanese {
                         "すべてのコマンド：矢印 / Enter / Esc"

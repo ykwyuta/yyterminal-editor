@@ -217,6 +217,10 @@ impl Harness {
         self.wait_for("complete command menu", |s| menu(s).is_some())?;
         let commands = yyterminal_editor::commands::COMMANDS;
         ensure!(commands.contains(&name), "Unknown command: {name}");
+        let name_label = yyterminal_editor::commands::label(
+            name,
+            yyterminal_editor::commands::Language::English,
+        );
         let mut selected = 0usize;
         for _ in 0..commands.len() {
             let MenuView {
@@ -225,7 +229,7 @@ impl Harness {
                 bottom,
                 items,
             } = menu(&self.screen).context("Command menu disappeared")?;
-            if let Some((row, _)) = items.iter().find(|(_, label)| label == name) {
+            if let Some((row, _)) = items.iter().find(|(_, label)| label == name_label) {
                 self.send(
                     format!(
                         "\x1b[<0;{};{}M\x1b[<0;{};{}m",
@@ -239,7 +243,10 @@ impl Harness {
                 return Ok(());
             }
             selected = (selected + 3).min(commands.len() - 1);
-            let expected = commands[selected];
+            let expected = yyterminal_editor::commands::label(
+                commands[selected],
+                yyterminal_editor::commands::Language::English,
+            );
             self.send(
                 format!("\x1b[<65;{};{}M", (x + right) / 2 + 1, bottom.max(2) / 2).as_bytes(),
             )?;
@@ -991,6 +998,41 @@ fn database_query_grid_plan_mouse_and_resize_use_real_terminal() -> Result<()> {
         s.screen_row(16).text().contains('┘') && s.screen_text().contains("Database")
     })?;
     app.command("DB Query")?;
+    app.wait("SQL editor")?;
+    app.finish()
+}
+
+#[test]
+fn database_management_menus_are_local_in_real_terminal() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("empty.txt");
+    std::fs::write(&path, "")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.click_text("View")?;
+    app.wait("Database Management")?;
+    app.click_text("Database Management")?;
+    app.wait("SQL editor")?;
+    app.wait_for("database categories inside management frame", |screen| {
+        !screen.screen_row(0).text().contains("Database")
+            && (1..screen.rows()).any(|y| {
+                let text = screen.screen_row(y).text();
+                text.contains("Database") && text.contains("SQL") && text.contains("Results")
+            })
+    })?;
+    app.send(b"\x1b[21~")?;
+    app.wait("DB New connection")?;
+    app.send(b"\x1b[C")?;
+    app.wait("DB Commit")?;
+    app.send(b"\x1b[D")?;
+    app.wait("DB New connection")?;
+    app.send(b"\x1b")?;
+    app.wait_for("database menu closed", |screen| {
+        !screen.screen_text().contains("DB New connection")
+    })?;
+    app.click_text("SQL  Results")?;
+    app.wait("DB Commit")?;
+    app.click_text("DB Query")?;
     app.wait("SQL editor")?;
     app.finish()
 }

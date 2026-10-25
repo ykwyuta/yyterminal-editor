@@ -155,3 +155,9 @@ Windowsのモデル／画面バッファ試験のほか、Linux実端末試験�
 - [描画性能の測定とキャッシュ検証](render-performance.md)
 
 Windows ARM64の `windows-11-arm` はVS 2026へ移行しているため、同梱DuckDB 1.4.1のfmtと互換性のある併設v143（MSVC 14.44）をVsDevCmdで選択する。ARM64ホスト・ARM64ターゲット、PATH／INCLUDE／LIBとVCToolsVersionを維持し、CIが出力する版を確認する。コンポーネント不在は準備失敗とする。
+
+### DBメニューとFileIndex
+
+親メニューのView > Database ManagementからDB画面を開く。接続・SQL・検索結果・計画・ERの5メニューは画面内に配置し、ポップアップも画面内に収める。DB画面のF10は接続メニューを開き、左右キーはDBの5分類内で循環する。F1は全コマンド一覧を開く。
+
+ターミナルエディタはFileIndexを利用しない。固定SHAの`yy-db-core`は`duckdb = 1.4.1`を`bundled`で直接依存しているため、FileIndexを無効にしてもDuckDBのC++ビルドは削減されない。DuckDBはDB接続機能に必要であり、現在の共有クレートにはこれを除外するfeatureがない。

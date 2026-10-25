@@ -1,7 +1,7 @@
 yyterminal-editor / yyte — Initial developer preview
 
 F1           All commands (arrows, Enter; Esc closes)
-F10          File menu (Left/Right switch menu groups)
+F10          File menu (Database menu in Database Management; Left/Right switch groups)
 F2           Editor
 F3           Git status
 F4           Integrated shell
@@ -323,7 +323,7 @@ File / ファイル: new/open, encoding for the next open, workspace folders,
   save/save as, exports, close tab, quit.
 Edit / 編集: undo/redo, cut/copy/paste, selection and cell editing.
 Search / 検索: find text and yymerge comparison.
-View / 表示: explorer, folder display mode, refresh, tabs and previews.
+View / 表示: explorer, folder display mode, refresh, tabs, previews and Database Management.
 Insert/Delete / 挿入・削除: rows, columns, records and sheets.
 Format / 書式: column width, row height, bold and number format.
 Data / データ: CSV/TSV/delimited/fixed-length/spreadsheet modes, layouts,
@@ -333,7 +333,9 @@ Settings / 設定: menu language. Help / ヘルプ: this help.
 
 Click categories to open them; hover over another category to switch.
 Left/Right switches groups, Up/Down selects, Enter applies, Esc cancels.
-F10 opens File; F1 retains the complete command palette. When the terminal
+F10 opens File (or the local Database menu in Database Management); F1 retains
+the complete command palette. Database/SQL/Results/Plan/ER menus are inside
+the Database Management frame, opened through View. When the terminal
 is narrow, category names wrap onto additional header rows.
 
 Folder tree / フォルダーのツリー表示
