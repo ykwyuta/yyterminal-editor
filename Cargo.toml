@@ -24,3 +24,10 @@ yy-io = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531
 yy-term = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
 yy-jobs = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
 yy-config = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-delimited = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-cobol = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-sheet = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-formula = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+yy-numfmt = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+base64 = "0.22"
+yy-merge-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }

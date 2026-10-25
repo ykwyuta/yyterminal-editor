@@ -3,3 +3,5 @@
 *.toml text eol=lf
 *.md text eol=lf
 *.yml text eol=lf
+demo/data.csv -text
+demo/records.dat -text

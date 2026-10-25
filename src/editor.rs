@@ -10,6 +10,10 @@ use yy_core::{Document, OpenOptions, Selection, SelectionSet, Version};
 
 pub struct Editor {
     pub doc: Document,
+    pub raw: bool,
+    pub spreadsheet: bool,
+    pub book: Option<crate::workbook::Book>,
+    pub table: Option<crate::data::Grid>,
     pub path: Option<PathBuf>,
     pub top: u64,
     pub saved: Version,
@@ -38,6 +42,10 @@ impl Editor {
         Self {
             saved: doc.version(),
             doc,
+            raw: false,
+            spreadsheet: false,
+            book: None,
+            table: None,
             path: None,
             top: 0,
             digest: None,
@@ -45,6 +53,12 @@ impl Editor {
         }
     }
     pub fn open(path: &Path, encoding: Option<yy_core::Encoding>) -> Result<Self> {
+        Self::load(path, encoding, false)
+    }
+    pub fn open_raw(path: &Path) -> Result<Self> {
+        Self::load(path, None, true)
+    }
+    fn load(path: &Path, encoding: Option<yy_core::Encoding>, raw: bool) -> Result<Self> {
         let path = path.canonicalize().context("Cannot open file")?;
         let storage = tempfile::tempdir()?;
         let copy = storage.path().join("document");
@@ -69,6 +83,7 @@ impl Editor {
             &copy,
             &OpenOptions {
                 encoding,
+                raw,
                 ..OpenOptions::default()
             },
         )?;
@@ -83,6 +98,10 @@ impl Editor {
         }
         Ok(Self {
             saved: doc.version(),
+            raw,
+            spreadsheet: false,
+            book: None,
+            table: None,
             doc,
             path: Some(path),
             top: 0,
@@ -91,7 +110,7 @@ impl Editor {
         })
     }
     pub fn modified(&self) -> bool {
-        self.doc.version() != self.saved
+        self.book.as_ref().is_some_and(|b| b.doc.dirty) || self.doc.version() != self.saved
     }
     pub fn caret(&self) -> u64 {
         self.doc.selections().primary().head

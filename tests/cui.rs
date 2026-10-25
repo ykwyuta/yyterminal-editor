@@ -137,3 +137,275 @@ fn interactive_editor_save_preview_shell_resize_and_exit() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("Reader panicked"))?;
     result
 }
+
+struct Harness {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    _master: Box<dyn portable_pty::MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    rx: Option<mpsc::Receiver<Vec<u8>>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    screen: yy_term::Terminal,
+}
+impl Harness {
+    fn new(path: &std::path::Path) -> Result<Self> {
+        let pair = portable_pty::native_pty_system().openpty(PtySize {
+            cols: 100,
+            rows: 30,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_yyte"));
+        command.arg(path);
+        command.cwd(path.parent().unwrap());
+        command.env("TERM", "xterm-256color");
+        command.env("SHELL", "/bin/sh");
+        let child = pair.slave.spawn_command(command)?;
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut buf = [0; 8192];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            _master: pair.master,
+            writer,
+            rx: Some(rx),
+            worker: Some(worker),
+            screen: yy_term::Terminal::new(100, 30, 100),
+        })
+    }
+    fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+    fn wait_for(
+        &mut self,
+        label: &str,
+        predicate: impl Fn(&yy_term::Terminal) -> bool,
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !predicate(&self.screen) {
+            let bytes = self
+                .rx
+                .as_ref()
+                .unwrap()
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .with_context(|| {
+                    format!("Waiting for {label}; screen: {}", self.screen.screen_text())
+                })?;
+            self.screen.feed(&bytes);
+            let replies = self.screen.take_responses();
+            if !replies.is_empty() {
+                self.send(&replies)?;
+            }
+        }
+        Ok(())
+    }
+    fn wait(&mut self, text: &str) -> Result<()> {
+        self.wait_for(text, |screen| screen.screen_text().contains(text))
+    }
+    fn command(&mut self, name: &str) -> Result<()> {
+        self.send(b"\x1bOP")?;
+        self.wait("Commands: arrows")?;
+        let highlighted = |screen: &yy_term::Terminal| -> String {
+            (0..screen.rows())
+                .filter_map(|i| {
+                    let row = screen.screen_row(i);
+                    row.cells
+                        .iter()
+                        .any(|c| c.attr.bg == yy_term::Color::Indexed(4))
+                        .then(|| row.text())
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        for _ in 0..128 {
+            let current = highlighted(&self.screen);
+            if current.contains(name) {
+                self.send(b"\r")?;
+                return Ok(());
+            }
+            self.send(b"\x1bOB")?;
+            self.wait_for("menu selection", |screen| highlighted(screen) != current)?;
+        }
+        anyhow::bail!("Menu command missing: {name}")
+    }
+    fn finish(&mut self) -> Result<()> {
+        self.send(b"\x11")?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                ensure!(status.success(), "Exit failed: {status:?}");
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "Exit timed out: {}",
+                self.screen.screen_text()
+            );
+            if let Ok(bytes) = self
+                .rx
+                .as_ref()
+                .unwrap()
+                .recv_timeout(Duration::from_millis(100))
+            {
+                self.screen.feed(&bytes);
+            }
+        }
+    }
+}
+impl Drop for Harness {
+    fn drop(&mut self) {
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        self.rx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+#[test]
+fn interactive_csv_table_edits_and_saves_quoted_multiline_cell() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("data.csv");
+    std::fs::write(&path, b"id,note\r\n1,original\r\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.send(b"\x1b[18~")?;
+    app.wait("Table ready")?;
+    app.send(b"\x1bOB\x1bOC\r")?;
+    app.wait("Edit cell")?;
+    app.send("\x01\x1b[200~changed,\nline\x1b[201~\r".as_bytes())?;
+    app.wait_for("updated table", |screen| {
+        let text = screen.screen_text();
+        text.contains("Table ready") && !text.contains("Edit cell") && text.contains("changed,")
+    })?;
+    app.send(b"\x13")?;
+    app.wait("Saved")?;
+    ensure!(
+        std::fs::read(&path)? == b"id,note\r\n1,\"changed,\nline\"\r\n",
+        "CSV quoting or line endings changed"
+    );
+    app.finish()
+}
+#[test]
+fn interactive_fixed_table_edits_packed_decimal_and_preserves_other_bytes() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("records.dat");
+    let bytes = [b'A', b'B', b'C', b'D', 0x12, 0x34, 0x5c, 0xde, 0xad];
+    std::fs::write(&path, bytes)?;
+    std::fs::write(
+        dir.path().join("record.cpy"),
+        "01 REC.\n 05 ID PIC X(4).\n 05 AMOUNT PIC S9(5) COMP-3.\n",
+    )?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("Fixed-length table")?;
+    app.wait("COPYBOOK;RECORD_BYTES")?;
+    app.send(b"record.cpy;9;MS932;none\r")?;
+    app.wait("Table ready")?;
+    app.wait("Fixed 9 bytes")?;
+    app.send(b"\x1bOC\r")?;
+    app.wait("Edit cell")?;
+    app.send(b"\x01100000\r")?;
+    app.wait("Value rejected")?;
+    ensure!(
+        std::fs::read(&path)? == bytes,
+        "Rejected input wrote to disk"
+    );
+    app.send(b"\r")?;
+    app.wait("Edit cell")?;
+    app.send(b"\x0142\r")?;
+    app.wait_for("packed decimal changed", |screen| {
+        let text = screen.screen_text();
+        text.contains("Table ready") && !text.contains("Edit cell") && text.contains("42")
+    })?;
+    app.send(b"\x13")?;
+    app.wait("Saved")?;
+    let result = std::fs::read(&path)?;
+    ensure!(
+        result[..4] == bytes[..4] && result[7..] == bytes[7..],
+        "Untouched fields changed"
+    );
+    ensure!(
+        result[4..7] == [0x00, 0x04, 0x2c],
+        "Packed decimal was not encoded: {result:?}"
+    );
+    app.command("Export fixed-length")?;
+    app.wait("Export fixed-length data")?;
+    app.send(b"exported.dat\r")?;
+    app.wait("Fixed-length export complete")?;
+    ensure!(
+        std::fs::read(dir.path().join("exported.dat"))? == result,
+        "Fixed export changed raw bytes"
+    );
+    app.finish()
+}
+
+#[test]
+fn interactive_workbook_sizes_formulas_save_and_yymerge_diff() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("data.csv");
+    std::fs::write(&path, b"name,value\r\nalpha,1\r\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("Spreadsheet mode")?;
+    app.wait("Spreadsheet ready")?;
+    app.send(b"\x1bOB\x1bOC\r")?;
+    app.wait("Cell / formula")?;
+    app.send(b"\x01=2*3\r")?;
+    app.wait_for("formula result", |s| {
+        let t = s.screen_text();
+        t.contains("Spreadsheet ready")
+            && !t.contains("[Working]")
+            && t.contains("B2: =2*3")
+            && !t.contains("Cell / formula")
+    })?;
+    app.command("Row height")?;
+    app.wait("Row height: 1..20")?;
+    app.send(b"3\r")?;
+    app.wait_for("row height applied", |s| {
+        let t = s.screen_text();
+        t.contains("Spreadsheet ready")
+            && !t.contains("[Working]")
+            && !t.contains("Row height: 1..20")
+    })?;
+    app.command("Column width")?;
+    app.wait("Column width: 4..80")?;
+    app.send(b"28\r")?;
+    app.wait_for("column width applied", |s| {
+        let t = s.screen_text();
+        t.contains("Spreadsheet ready")
+            && !t.contains("[Working]")
+            && !t.contains("Column width: 4..80")
+    })?;
+    app.command("Save as")?;
+    app.wait("Save as path")?;
+    app.send(b"book.yys\r")?;
+    app.wait_for("workbook saved", |s| {
+        let t = s.screen_text();
+        t.contains("book.yys]")
+            && t.contains("Spreadsheet ready")
+            && !t.contains("[Working]")
+            && !t.contains("Save as path")
+    })?;
+    ensure!(dir.path().join("book.yys").is_file(), "No workbook file");
+    app.command("Compare file (yymerge)")?;
+    app.wait("yymerge: compare")?;
+    app.send(b"data.csv\r")?;
+    app.wait("1 changed")?;
+    app.wait("yymerge comparison")?;
+    app.send(b"\x1bOQ")?;
+    app.wait("B2: =2*3")?;
+    app.finish()
+}

@@ -1,7 +1,12 @@
+mod data;
+mod diff;
 mod editor;
+mod fixed_export;
 mod git;
+mod layouts;
 mod shell;
 mod ui;
+mod workbook;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode as K, KeyEvent, KeyEventKind, KeyModifiers as M};
@@ -26,6 +31,39 @@ const COMMANDS: &[&str] = &[
     "Next tab",
     "Close tab",
     "Find text",
+    "Spreadsheet mode",
+    "New workbook",
+    "Insert rows",
+    "Delete rows",
+    "Insert columns",
+    "Delete columns",
+    "Move column",
+    "Sort ascending",
+    "Sort descending",
+    "Filter column",
+    "Clear sort/filter",
+    "Autofill down",
+    "Column width",
+    "Row height",
+    "Export fixed-length",
+    "Compare file (yymerge)",
+    "Bold",
+    "Number format",
+    "Next sheet",
+    "Add sheet",
+    "Row layout",
+    "Export CSV",
+    "Copy to system clipboard",
+    "CSV table",
+    "TSV table",
+    "Delimited table",
+    "Fixed-length table",
+    "Apply layout (.yyl)",
+    "Save layout (.yyl)",
+    "Infer fixed layout",
+    "Edit cell",
+    "Append record",
+    "Delete record",
     "Explorer",
     "Terminal",
     "Git status",
@@ -41,15 +79,35 @@ const COMMANDS: &[&str] = &[
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Editor,
+    Table,
+    Sheet,
     Terminal,
     Git,
+    Diff,
     Preview,
     Help,
 }
 enum Message {
     Open(Box<Result<Editor>>),
+    Fixed(Box<Result<Editor>>),
+    Workbook(Box<Result<Editor>>),
+    BookOp {
+        tab: usize,
+        book: Box<workbook::Book>,
+        result: Result<()>,
+    },
+    Page {
+        tab: usize,
+        version: yy_core::Version,
+        result: Result<data::Page>,
+    },
     Saved(Result<(usize, PathBuf, yy_core::Version, [u8; 32])>),
     Git(Result<String>),
+    Compared {
+        book: Option<(usize, Box<workbook::Book>)>,
+        result: Result<diff::Comparison>,
+    },
+    Notice(Result<String>),
     Workspace(Result<Vec<PathBuf>>),
     Entries(Result<(PathBuf, Vec<PathBuf>)>),
 }
@@ -60,6 +118,24 @@ enum Prompt {
     Find,
     Commit,
     Encoding,
+    Delimiter,
+    Fixed,
+    Cell,
+    BookCell,
+    BookFilter,
+    BookFill,
+    BookWidth,
+    BookHeight,
+    FixedExport,
+    DiffPath,
+    BookFormat,
+    BookSheet,
+    BookMove,
+    BookLayout,
+    BookExport,
+    LayoutOpen,
+    LayoutSave,
+    LayoutInfer,
     Quit,
 }
 struct App {
@@ -76,9 +152,11 @@ struct App {
     term_back: usize,
     clipboard: String,
     output: String,
+    comparison: Option<diff::Comparison>,
     scroll: u16,
     status: String,
     busy: bool,
+    pending_saves: std::collections::VecDeque<(usize, PathBuf)>,
     tx: Sender<Message>,
     rx: Receiver<Message>,
     prompt: Option<Prompt>,
@@ -87,6 +165,7 @@ struct App {
     quit: bool,
     rows: Vec<(u64, u64, String)>,
     editor_area: Rect,
+    hit_cells: Vec<(Rect, u64, u32)>,
 }
 impl App {
     fn new(root: PathBuf) -> Self {
@@ -105,9 +184,11 @@ impl App {
             term_back: 0,
             clipboard: String::new(),
             output: String::new(),
+            comparison: None,
             scroll: 0,
             status: "F1: commands / help   F6: explorer   F4: terminal".into(),
             busy: false,
+            pending_saves: std::collections::VecDeque::new(),
             tx,
             rx,
             prompt: None,
@@ -116,6 +197,7 @@ impl App {
             quit: false,
             rows: vec![],
             editor_area: Rect::default(),
+            hit_cells: vec![],
         };
         app.read_dir(app.root.clone());
         app
@@ -147,7 +229,24 @@ impl App {
             return;
         }
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if matches!(extension, "yys" | "yyd" | "yy3d" | "yyplan") {
+        if extension.eq_ignore_ascii_case("yys") {
+            self.busy = true;
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> Result<Editor> {
+                    let book = workbook::Book::open(&path)?;
+                    let mut editor = Editor::empty();
+                    editor.path = book.path.clone();
+                    editor.digest = book.digest;
+                    editor.spreadsheet = true;
+                    editor.book = Some(book);
+                    Ok(editor)
+                })();
+                let _ = tx.send(Message::Workbook(Box::new(result)));
+            });
+            return;
+        }
+        if matches!(extension, "yyd" | "yy3d" | "yyplan") {
             self.status = "This YY binary format is not editable in the initial preview".into();
             return;
         }
@@ -168,6 +267,18 @@ impl App {
     }
     fn save(&mut self, path: PathBuf) {
         if self.busy {
+            self.pending_saves.retain(|(tab, _)| *tab != self.tab);
+            self.pending_saves.push_back((self.tab, path));
+            self.status = "Save queued after the active operation".into();
+            return;
+        }
+        if self.tabs[self.tab].spreadsheet {
+            let path = if path.is_absolute() {
+                path
+            } else {
+                self.root.join(path)
+            };
+            self.book_op(workbook::Op::Save(path));
             return;
         }
         let e = &self.tabs[self.tab];
@@ -230,6 +341,83 @@ impl App {
             let _ = tx.send(Message::Saved(result));
         });
     }
+    fn export_raw_fixed(&mut self, path: PathBuf) {
+        if self.busy {
+            return;
+        }
+        if !self.tabs[self.tab].raw
+            || !matches!(
+                self.tabs[self.tab].table.as_ref().map(|g| &g.mode),
+                Some(data::Mode::Fixed(_))
+            )
+        {
+            self.status = "Apply a fixed-length layout first".into();
+            return;
+        }
+        let snapshot = self.tabs[self.tab].doc.snapshot().clone();
+        self.busy = true;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<String> {
+                anyhow::ensure!(!path.exists(), "Export refuses existing paths");
+                let file = tempfile::NamedTempFile::new_in(path.parent().context("No parent")?)?
+                    .into_temp_path();
+                yy_io::save_snapshot(&snapshot, &file, &yy_io::SaveFormat::utf8(), None)?;
+                file.persist_noclobber(&path).map_err(|e| e.error)?;
+                Ok("Fixed-length export complete (original bytes and layout preserved)".into())
+            })();
+            let _ = tx.send(Message::Notice(result));
+        });
+    }
+    fn diff_file(&mut self, path: PathBuf) {
+        if self.busy {
+            return;
+        }
+        let left = self.tabs[self.tab].doc.snapshot().clone();
+        let raw = self.tabs[self.tab].raw;
+        let encoding = self.encoding;
+        let book = self.tabs[self.tab]
+            .book
+            .take()
+            .map(|b| (self.tab, Box::new(b)));
+        self.busy = true;
+        self.status = "Comparing with yymerge...".into();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<diff::Comparison> {
+                let storage = tempfile::tempdir()?;
+                let left = if let Some((_, book)) = &book {
+                    let p = storage.path().join("left.csv");
+                    book.export(&p)?;
+                    Editor::open(&p, Some(yy_core::Encoding::Utf8))?
+                        .doc
+                        .snapshot()
+                        .clone()
+                } else {
+                    left
+                };
+                let right = if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("yys"))
+                {
+                    let b = workbook::Book::open(&path)?;
+                    let p = storage.path().join("right.csv");
+                    b.export(&p)?;
+                    Editor::open(&p, Some(yy_core::Encoding::Utf8))?
+                } else if raw {
+                    Editor::open_raw(&path)?
+                } else {
+                    Editor::open(&path, encoding)?
+                };
+                diff::Comparison::new(
+                    left,
+                    right.doc.snapshot().clone(),
+                    path.display().to_string(),
+                )
+            })();
+            let _ = tx.send(Message::Compared { book, result });
+        });
+    }
     fn git(&mut self, args: Vec<String>) {
         if self.busy {
             return;
@@ -252,10 +440,37 @@ impl App {
             changed = true;
             self.busy = false;
             let result: Result<()> = match message {
+                Message::Workbook(result)=>(*result).map(|editor|{self.tabs.push(editor);self.tab=self.tabs.len()-1;self.view=View::Sheet;self.explorer=false;self.status="Spreadsheet ready (yysheet engine)".into();}),
+                Message::BookOp{tab,book,result}=>{
+                    self.tabs[tab].path=book.path.clone();self.tabs[tab].digest=book.digest;self.tabs[tab].book=Some(*book);
+                    match result {Ok(())=>{self.status="Spreadsheet ready".into();Ok(())},Err(e)=>Err(e)}
+                },
+                Message::Compared { book, result } => {
+                    if let Some((tab, book)) = book { self.tabs[tab].book = Some(*book); }
+                    result.map(|comparison| { self.status = format!("yymerge: {} changed rows | N/P: next/previous difference | F2: editor", comparison.index.changes); self.comparison = Some(comparison); self.view = View::Diff; self.explorer = false; })
+                },
+                Message::Notice(result)=>result.map(|notice|self.status=notice),
+                Message::Fixed(result) => (*result).map(|e| {
+                    self.tabs.push(e);self.tab=self.tabs.len()-1;self.view=if self.tabs[self.tab].spreadsheet{View::Sheet}else{View::Table};self.explorer=false;
+                    self.status="Fixed-length document opened".into();
+                }),
+                Message::Page {tab,version,result} => {
+                    let editor=&mut self.tabs[tab];
+                    if editor.doc.version()==version
+                        && let Some(grid)=&mut editor.table {match result {
+                            Ok(page)=>{self.status=if page.notice.is_empty(){"Table ready: Enter edit / F8 delete / F9 append".into()}else{page.notice.clone()};
+                                grid.row=grid.row.min(page.rows.len().saturating_sub(1));
+                                grid.col=grid.col.min(page.rows.get(grid.row).map_or(0,|row|row.fields.len().saturating_sub(1)));
+                                grid.page=Some(page);},
+                            Err(error)=>{self.status=format!("{error:#}");grid.error=Some(self.status.clone());}
+                        }}
+                    Ok(())
+                },
                 Message::Open(result) => (*result).map(|e| {
                     if self.tabs.len() == 1
                         && self.tabs[0].path.is_none()
                         && !self.tabs[0].modified()
+                        && !self.pending_saves.iter().any(|(tab,_)|*tab==0)
                     {
                         self.tabs[0] = e;
                         self.tab = 0;
@@ -301,7 +516,403 @@ impl App {
             }
             changed |= shell.screen.take_dirty();
         }
+        if !self.busy
+            && let Some((tab, path)) = self.pending_saves.pop_front()
+        {
+            let active = self.tab;
+            self.tab = tab;
+            self.save(path);
+            self.tab = active;
+            changed = true;
+        }
+        if self.view == View::Table && !self.busy {
+            let editor = &mut self.tabs[self.tab];
+            if let Some(grid) = &mut editor.table {
+                if grid
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| page.version != editor.doc.version())
+                {
+                    grid.reset();
+                }
+                if grid.page.is_none() && grid.error.is_none() {
+                    let snapshot = editor.doc.snapshot().clone();
+                    let version = editor.doc.version();
+                    let mode = grid.mode.clone();
+                    let start = grid.start;
+                    let tab = self.tab;
+                    let tx = self.tx.clone();
+                    self.busy = true;
+                    changed = true;
+                    std::thread::spawn(move || {
+                        let result = data::read_page(&snapshot, version, &mode, start);
+                        let _ = tx.send(Message::Page {
+                            tab,
+                            version,
+                            result,
+                        });
+                    });
+                }
+            }
+        }
         changed
+    }
+    fn make_workbook(&mut self, empty: bool) {
+        if self.busy {
+            return;
+        }
+        if self.tabs[self.tab].spreadsheet {
+            self.view = View::Sheet;
+            return;
+        }
+        let snapshot = self.tabs[self.tab].doc.snapshot().clone();
+        let mode = self.tabs[self.tab].table.as_ref().map(|g| g.mode.clone());
+        let tx = self.tx.clone();
+        self.busy = true;
+        std::thread::spawn(move || {
+            let result = (|| -> Result<Editor> {
+                let book = if empty {
+                    workbook::Book::empty()?
+                } else {
+                    workbook::Book::import(&snapshot, mode.as_ref())?
+                };
+                let mut editor = Editor::empty();
+                editor.spreadsheet = true;
+                editor.book = Some(book);
+                Ok(editor)
+            })();
+            let _ = tx.send(Message::Workbook(Box::new(result)));
+        });
+    }
+    fn book_op(&mut self, op: workbook::Op) {
+        if self.busy {
+            self.status = "Wait for the active operation".into();
+            return;
+        }
+        let Some(mut book) = self.tabs[self.tab].book.take() else {
+            self.status = "Use Spreadsheet mode for this command".into();
+            return;
+        };
+        self.busy = true;
+        let tab = self.tab;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = book.apply(op);
+            let _ = tx.send(Message::BookOp {
+                tab,
+                book: Box::new(book),
+                result,
+            });
+        });
+    }
+    fn sheet_key(&mut self, key: KeyEvent) {
+        if self.busy {
+            return;
+        }
+        if key.code == K::Enter {
+            self.command("Edit cell");
+            return;
+        }
+        if key.modifiers.contains(M::CONTROL) {
+            match key.code {
+                K::Char('c') | K::Char('x') => {
+                    if let Some(book) = &self.tabs[self.tab].book {
+                        match book.copy() {
+                            Ok(s) => self.clipboard = s,
+                            Err(e) => {
+                                self.status = e.to_string();
+                                return;
+                            }
+                        }
+                    }
+                    if key.code == K::Char('x') {
+                        self.book_op(workbook::Op::Clear);
+                    }
+                }
+                K::Char('v') => self.book_op(workbook::Op::Paste(self.clipboard.clone())),
+                K::Char('z') | K::Char('y') => {
+                    if let Some(book) = &mut self.tabs[self.tab].book {
+                        if key.code == K::Char('z') {
+                            book.doc.undo();
+                        } else {
+                            book.doc.redo();
+                        }
+                    }
+                }
+                K::Char('a') => {
+                    if let Some(book) = &mut self.tabs[self.tab].book {
+                        let (rows, _) = book.current().extent();
+                        let cols = book.data_cols();
+                        book.anchor = Some((0, 0));
+                        book.row = rows.saturating_sub(1);
+                        book.col = cols.saturating_sub(1);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if key.code == K::Delete {
+            self.book_op(workbook::Op::Clear);
+            return;
+        }
+        if let Some(book) = &mut self.tabs[self.tab].book {
+            let old = (book.row, book.col);
+            match key.code {
+                K::Up => book.row = book.row.saturating_sub(1),
+                K::Down => book.row = book.row.saturating_add(1).min(1_000_000_000),
+                K::Left | K::BackTab => book.col = book.col.saturating_sub(1),
+                K::Right | K::Tab => {
+                    book.col = book
+                        .col
+                        .saturating_add(1)
+                        .min(if book.current().fixed.is_some() {
+                            book.data_cols().saturating_sub(1)
+                        } else {
+                            16383
+                        })
+                }
+                K::PageUp => book.row = book.row.saturating_sub(20),
+                K::PageDown => book.row = book.row.saturating_add(20).min(1_000_000_000),
+                K::Home => book.col = 0,
+                K::End => book.col = book.data_cols().saturating_sub(1),
+                _ => return,
+            }
+            if key.modifiers.contains(M::SHIFT) {
+                book.anchor.get_or_insert(old);
+            } else {
+                book.anchor = None;
+            }
+        }
+    }
+    fn copy_system(&mut self) {
+        use base64::Engine;
+        let result = if let Some(book) = &self.tabs[self.tab].book {
+            book.copy()
+        } else if let Some(grid) = &self.tabs[self.tab].table {
+            grid.copy()
+        } else {
+            Ok(self.clipboard.clone())
+        };
+        match result {
+            Ok(text) => {
+                if text.len() > 1024 * 1024 {
+                    self.status = "Clipboard exceeds 1 MiB".into();
+                    return;
+                }
+                let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                use std::io::Write;
+                if let Err(e) = write!(std::io::stdout(), "\x1b]52;c;{encoded}\x07")
+                    .and_then(|_| std::io::stdout().flush())
+                {
+                    self.status = e.to_string();
+                } else {
+                    self.clipboard = text;
+                    self.status="OSC 52 clipboard copy requested; paste using the terminal's paste shortcut".into();
+                }
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+    fn mouse(&mut self, event: event::MouseEvent) {
+        if self.busy || self.palette.is_some() || self.prompt.is_some() {
+            return;
+        }
+        use event::{MouseButton, MouseEventKind as Kind};
+        if matches!(event.kind, Kind::ScrollUp | Kind::ScrollDown) {
+            let up = event.kind == Kind::ScrollUp;
+            if self.view == View::Sheet {
+                if let Some(book) = &mut self.tabs[self.tab].book {
+                    if up {
+                        book.row = book.row.saturating_sub(3);
+                    } else {
+                        book.row = book.row.saturating_add(3);
+                    }
+                }
+            } else if self.view == View::Table {
+                for _ in 0..3 {
+                    self.table_key(KeyEvent::new(if up { K::Up } else { K::Down }, M::NONE));
+                }
+            }
+            return;
+        }
+        if !matches!(
+            event.kind,
+            Kind::Down(MouseButton::Left)
+                | Kind::Drag(MouseButton::Left)
+                | Kind::Down(MouseButton::Right)
+        ) {
+            return;
+        }
+        let point = ratatui::layout::Position::new(event.column, event.row);
+        let Some((_, r, c)) = self
+            .hit_cells
+            .iter()
+            .find(|(rect, _, _)| rect.contains(point))
+            .copied()
+        else {
+            return;
+        };
+        let extend = event.modifiers.contains(M::SHIFT) || matches!(event.kind, Kind::Drag(_));
+        if self.view == View::Sheet {
+            if let Some(book) = &mut self.tabs[self.tab].book {
+                let old = (book.row, book.col);
+                if extend {
+                    book.anchor.get_or_insert(old);
+                } else {
+                    book.anchor = None;
+                }
+                book.row = r;
+                book.col = c;
+            }
+        } else if self.view == View::Table
+            && let Some(grid) = &mut self.tabs[self.tab].table
+        {
+            let old = (grid.row, grid.col);
+            if extend {
+                grid.anchor.get_or_insert(old);
+            } else {
+                grid.anchor = None;
+            }
+            grid.row = r as usize;
+            grid.col = c as usize;
+        }
+        if event.kind == Kind::Down(MouseButton::Right) {
+            self.palette = Some(0);
+        }
+    }
+    fn table_mode(&mut self, dialect: yy_delimited::Dialect) {
+        if self.tabs[self.tab].spreadsheet {
+            self.view = View::Sheet;
+            return;
+        }
+        if self.busy {
+            return;
+        }
+        if self.tabs[self.tab].raw {
+            self.status = "Raw fixed-length documents cannot become CSV text".into();
+            return;
+        }
+        self.tabs[self.tab].table = Some(data::Grid::new(data::Mode::Delimited(dialect)));
+        self.view = View::Table;
+        self.explorer = false;
+    }
+    fn table_toggle(&mut self) {
+        if self.tabs[self.tab].spreadsheet {
+            self.view = View::Sheet;
+            self.explorer = false;
+            return;
+        }
+        if self.view == View::Table && !self.tabs[self.tab].raw {
+            self.view = View::Editor;
+            self.explorer = false;
+            return;
+        }
+        if self.tabs[self.tab].table.is_some() {
+            self.view = View::Table;
+            self.explorer = false;
+            return;
+        }
+        let dialect = self.tabs[self.tab]
+            .path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|s| s.to_str())
+            .and_then(yy_delimited::Dialect::for_extension)
+            .unwrap_or_else(yy_delimited::Dialect::csv);
+        self.table_mode(dialect);
+    }
+    fn table_key(&mut self, key: KeyEvent) {
+        if self.busy {
+            return;
+        }
+        if key.code == K::Enter {
+            self.command("Edit cell");
+            return;
+        }
+        let e = &mut self.tabs[self.tab];
+        let Some(grid) = &mut e.table else {
+            return;
+        };
+        if key.modifiers.contains(M::CONTROL) {
+            match key.code {
+                K::Char('z') => {
+                    e.doc.undo();
+                    grid.reset();
+                }
+                K::Char('y') => {
+                    e.doc.redo();
+                    grid.reset();
+                }
+                K::Char('c') => match grid.copy() {
+                    Ok(text) => self.clipboard = text,
+                    Err(error) => self.status = error.to_string(),
+                },
+                K::Char('v') => {
+                    if let Err(error) = grid.paste(&mut e.doc, &self.clipboard) {
+                        self.status = error.to_string();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        let old = (grid.row, grid.col);
+        if key.code == K::Delete {
+            if let Err(e) = grid.clear(&mut e.doc) {
+                self.status = e.to_string();
+            }
+            return;
+        }
+        let count = grid.page.as_ref().map_or(0, |p| p.rows.len());
+        match key.code {
+            K::Up => {
+                if grid.row == 0 {
+                    if grid.previous_page() {
+                        grid.row = data::PAGE_ROWS - 1;
+                    }
+                } else {
+                    grid.row -= 1;
+                }
+            }
+            K::Down => {
+                if grid.row + 1 >= count {
+                    grid.next_page();
+                } else {
+                    grid.row += 1;
+                }
+            }
+            K::PageDown => {
+                grid.next_page();
+            }
+            K::PageUp => {
+                grid.previous_page();
+            }
+            K::Left => grid.col = grid.col.saturating_sub(1),
+            K::Right | K::Tab => {
+                grid.col = (grid.col + 1).min(
+                    grid.selected()
+                        .map_or(0, |r| r.fields.len().saturating_sub(1)),
+                )
+            }
+            K::BackTab => grid.col = grid.col.saturating_sub(1),
+            K::Home => grid.col = 0,
+            K::End => {
+                grid.col = grid
+                    .selected()
+                    .map_or(0, |r| r.fields.len().saturating_sub(1))
+            }
+            _ => {}
+        }
+        if key.modifiers.contains(M::SHIFT) {
+            grid.anchor.get_or_insert(old);
+        } else {
+            grid.anchor = None;
+        }
+        grid.col = grid.col.min(
+            grid.selected()
+                .map_or(0, |r| r.fields.len().saturating_sub(1)),
+        );
     }
     fn ask(&mut self, prompt: Prompt) {
         self.prompt = Some(prompt);
@@ -309,6 +920,74 @@ impl App {
     }
     fn command(&mut self, name: &str) {
         match name {
+            "Spreadsheet mode" => self.make_workbook(false),
+            "New workbook" => self.make_workbook(true),
+            "Insert rows" => self.book_op(workbook::Op::InsertRows),
+            "Delete rows" => self.book_op(workbook::Op::DeleteRows),
+            "Insert columns" => self.book_op(workbook::Op::InsertCols),
+            "Delete columns" => self.book_op(workbook::Op::DeleteCols),
+            "Sort ascending" => self.book_op(workbook::Op::Sort(false)),
+            "Sort descending" => self.book_op(workbook::Op::Sort(true)),
+            "Clear sort/filter" => self.book_op(workbook::Op::ClearView),
+            "Bold" => self.book_op(workbook::Op::Bold),
+            "Next sheet" => self.book_op(workbook::Op::NextSheet),
+            "Filter column" => self.ask(Prompt::BookFilter),
+            "Autofill down" => self.ask(Prompt::BookFill),
+            "Row height" => self.ask(Prompt::BookHeight),
+            "Export fixed-length" => self.ask(Prompt::FixedExport),
+            "Compare file (yymerge)" => self.ask(Prompt::DiffPath),
+            "Column width" => self.ask(Prompt::BookWidth),
+            "Apply layout (.yyl)" => self.ask(Prompt::LayoutOpen),
+            "Save layout (.yyl)" => self.ask(Prompt::LayoutSave),
+            "Infer fixed layout" => self.ask(Prompt::LayoutInfer),
+            "Number format" => self.ask(Prompt::BookFormat),
+            "Move column" => self.ask(Prompt::BookMove),
+            "Add sheet" => self.ask(Prompt::BookSheet),
+            "Row layout" => self.ask(Prompt::BookLayout),
+            "Export CSV" => self.ask(Prompt::BookExport),
+            "Copy to system clipboard" => self.copy_system(),
+            "CSV table" => self.table_mode(yy_delimited::Dialect::csv()),
+            "TSV table" => self.table_mode(yy_delimited::Dialect::tsv()),
+            "Delimited table" => self.ask(Prompt::Delimiter),
+            "Fixed-length table" => self.ask(Prompt::Fixed),
+            "Edit cell" if self.tabs[self.tab].spreadsheet => {
+                if let Some(book) = &self.tabs[self.tab].book {
+                    match book.entry() {
+                        Ok(text) => {
+                            self.prompt = Some(Prompt::BookCell);
+                            self.input = text;
+                        }
+                        Err(e) => self.status = e.to_string(),
+                    }
+                }
+            }
+            "Edit cell" => {
+                if let Some(grid) = &self.tabs[self.tab].table {
+                    match grid.value() {
+                        Ok(value) => {
+                            self.prompt = Some(Prompt::Cell);
+                            self.input = value;
+                        }
+                        Err(error) => self.status = error.to_string(),
+                    }
+                }
+            }
+            "Append record" | "Delete record" => {
+                if self.busy {
+                    return;
+                }
+                let e = &mut self.tabs[self.tab];
+                if let Some(grid) = &mut e.table {
+                    let result = if name == "Append record" {
+                        grid.append(&mut e.doc)
+                    } else {
+                        grid.delete(&mut e.doc)
+                    };
+                    if let Err(error) = result {
+                        self.status = error.to_string();
+                    }
+                }
+            }
             "Open file" => self.ask(Prompt::Open),
             "Open encoding" => self.ask(Prompt::Encoding),
             "Workspace folders" => {
@@ -332,10 +1011,16 @@ impl App {
             }
             "Next tab" => {
                 self.tab = (self.tab + 1) % self.tabs.len();
-                self.view = View::Editor;
+                self.view = if self.tabs[self.tab].spreadsheet {
+                    View::Sheet
+                } else if self.tabs[self.tab].raw {
+                    View::Table
+                } else {
+                    View::Editor
+                };
             }
             "Close tab" => {
-                if self.busy {
+                if self.busy || !self.pending_saves.is_empty() {
                     self.status = "Wait for the active operation before closing tabs".into();
                     return;
                 }
@@ -347,6 +1032,13 @@ impl App {
                         self.tabs.push(Editor::empty());
                     }
                     self.tab = self.tab.min(self.tabs.len() - 1);
+                    self.view = if self.tabs[self.tab].spreadsheet {
+                        View::Sheet
+                    } else if self.tabs[self.tab].raw {
+                        View::Table
+                    } else {
+                        View::Editor
+                    };
                 }
             }
             "Find text" => self.ask(Prompt::Find),
@@ -392,7 +1084,7 @@ impl App {
                 self.scroll = 0;
             }
             "Quit" => {
-                if self.busy {
+                if self.busy || !self.pending_saves.is_empty() {
                     self.status = "Wait for the active operation before quitting".into();
                 } else if self.tabs.iter().any(Editor::modified) {
                     self.ask(Prompt::Quit);
@@ -406,6 +1098,135 @@ impl App {
     fn submit(&mut self, prompt: Prompt) {
         let input = std::mem::take(&mut self.input);
         match prompt {
+            Prompt::LayoutOpen => {
+                if self.busy {
+                    return;
+                }
+                let Some(path) = self.tabs[self.tab].path.clone() else {
+                    self.status = "Open a data file first".into();
+                    return;
+                };
+                if self.tabs[self.tab].modified() {
+                    self.status = "Save changes before applying a layout".into();
+                    return;
+                }
+                let layout = self.root.join(input);
+                let tx = self.tx.clone();
+                self.busy = true;
+                std::thread::spawn(move || {
+                    let result =
+                        layouts::load(&layout).and_then(|spec| layouts::open_data(&path, spec));
+                    let _ = tx.send(Message::Fixed(Box::new(result)));
+                });
+            }
+            Prompt::LayoutSave => {
+                if self.busy {
+                    return;
+                }
+                let e = &self.tabs[self.tab];
+                let spec = e
+                    .book
+                    .as_ref()
+                    .and_then(|b| b.current().fixed.clone())
+                    .or_else(|| {
+                        e.table.as_ref().and_then(|g| match &g.mode {
+                            data::Mode::Fixed(spec) => Some(spec.clone()),
+                            _ => None,
+                        })
+                    });
+                let Some(spec) = spec else {
+                    self.status = "No fixed layout in this document".into();
+                    return;
+                };
+                let path = self.root.join(input);
+                let tx = self.tx.clone();
+                self.busy = true;
+                std::thread::spawn(move || {
+                    let result = layouts::save(&path, &spec).map(|_| "Layout saved".to_owned());
+                    let _ = tx.send(Message::Notice(result));
+                });
+            }
+            Prompt::LayoutInfer => {
+                if self.busy {
+                    return;
+                }
+                let e = &self.tabs[self.tab];
+                let snapshot = e.raw.then(|| e.doc.snapshot().clone());
+                let path = e.path.clone();
+                if !e.raw && e.modified() {
+                    self.status = "Save text changes before inferring raw bytes".into();
+                    return;
+                }
+                let tx = self.tx.clone();
+                self.busy = true;
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<Editor> {
+                        let raw = if snapshot.is_none() {
+                            Some(Editor::open_raw(
+                                path.as_deref().context("Open a file first")?,
+                            )?)
+                        } else {
+                            None
+                        };
+                        let snap = snapshot
+                            .as_ref()
+                            .or_else(|| raw.as_ref().map(|e| e.doc.snapshot()))
+                            .context("No bytes")?;
+                        let text = layouts::infer(snap, &input)?;
+                        let mut e = Editor::empty();
+                        e.doc.insert_text(&text, false);
+                        Ok(e)
+                    })();
+                    let _ = tx.send(Message::Open(Box::new(result)));
+                });
+            }
+            Prompt::BookCell => self.book_op(workbook::Op::Set(input)),
+            Prompt::BookFilter => self.book_op(workbook::Op::Filter(input)),
+            Prompt::BookFormat => self.book_op(workbook::Op::Format(input)),
+            Prompt::BookSheet => self.book_op(workbook::Op::AddSheet(input)),
+            Prompt::BookLayout => self.book_op(workbook::Op::RowLayout(input)),
+            Prompt::BookExport => self.book_op(workbook::Op::Export(self.root.join(input))),
+            Prompt::BookFill => match input.parse() {
+                Ok(n) => self.book_op(workbook::Op::Fill(n)),
+                Err(_) => self.status = "Enter a row count".into(),
+            },
+            Prompt::BookHeight if !self.tabs[self.tab].spreadsheet => match input.parse::<u16>() {
+                Ok(h) if (1..=20).contains(&h) => {
+                    if let Some(g) = &mut self.tabs[self.tab].table {
+                        g.height = h;
+                    }
+                }
+                _ => self.status = "Height: 1..20".into(),
+            },
+            Prompt::BookHeight => match input.parse() {
+                Ok(h) => self.book_op(workbook::Op::Height(h)),
+                Err(_) => self.status = "Height: 1..20 terminal lines".into(),
+            },
+            Prompt::FixedExport => {
+                let path = self.root.join(input);
+                if self.tabs[self.tab].spreadsheet {
+                    self.book_op(workbook::Op::ExportFixed(path));
+                } else {
+                    self.export_raw_fixed(path);
+                }
+            }
+            Prompt::DiffPath => self.diff_file(self.root.join(input)),
+            Prompt::BookWidth if !self.tabs[self.tab].spreadsheet => match input.parse::<u16>() {
+                Ok(w) if (4..=80).contains(&w) => {
+                    if let Some(grid) = &mut self.tabs[self.tab].table {
+                        grid.width = w;
+                    }
+                }
+                _ => self.status = "Width: 4..80".into(),
+            },
+            Prompt::BookWidth => match input.parse() {
+                Ok(n) => self.book_op(workbook::Op::Width(n)),
+                Err(_) => self.status = "Enter a column width (4..80)".into(),
+            },
+            Prompt::BookMove => match yy_sheet::parse_col(&input) {
+                Some(c) => self.book_op(workbook::Op::MoveColumn(c)),
+                None => self.status = "Enter a destination column (A,B,...)".into(),
+            },
             Prompt::Open => {
                 let p = PathBuf::from(input);
                 self.open(if p.is_absolute() {
@@ -418,6 +1239,52 @@ impl App {
                 if !input.is_empty() {
                     self.save(PathBuf::from(input));
                 }
+            }
+            Prompt::Cell => {
+                let e = &mut self.tabs[self.tab];
+                if let Some(grid) = &mut e.table {
+                    match grid.replace(&mut e.doc, &input) {
+                        Ok(()) => self.status = "Cell updated; Ctrl+Z undoes".into(),
+                        Err(error) => self.status = error.to_string(),
+                    }
+                }
+            }
+            Prompt::Delimiter => {
+                if let Ok(bytes) = yy_delimited::parse_bytes(&input) {
+                    if let Some(d) = yy_delimited::Dialect::new(&bytes, Some(b'"')) {
+                        self.table_mode(d);
+                    } else {
+                        self.status = "Delimiter: 1..4 bytes, excluding quotes and newlines".into();
+                    }
+                } else {
+                    self.status = "Invalid delimiter escape".into();
+                }
+            }
+            Prompt::Fixed => {
+                if self.busy {
+                    return;
+                }
+                let e = &self.tabs[self.tab];
+                if e.modified() {
+                    self.status =
+                        "Save the document before opening it as fixed-length bytes".into();
+                    return;
+                }
+                let Some(path) = e.path.clone() else {
+                    self.status = "Open a data file first".into();
+                    return;
+                };
+                let base = self.root.clone();
+                let tx = self.tx.clone();
+                self.busy = true;
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<Editor> {
+                        let spec = data::fixed_spec(&input, &base)?;
+                        let e = layouts::open_data(&path, spec)?;
+                        Ok(e)
+                    })();
+                    let _ = tx.send(Message::Fixed(Box::new(result)));
+                });
             }
             Prompt::Encoding => {
                 if input.eq_ignore_ascii_case("auto") {
@@ -466,9 +1333,19 @@ impl App {
                 K::Esc => {
                     self.prompt = None;
                 }
+                K::Enter
+                    if matches!(prompt, Prompt::Cell | Prompt::BookCell)
+                        && key.modifiers.contains(M::ALT) =>
+                {
+                    self.input.push('\n')
+                }
+                K::Char('a' | 'u') if key.modifiers.contains(M::CONTROL) => self.input.clear(),
                 K::Enter => {
                     self.prompt = None;
                     self.submit(prompt);
+                }
+                K::Char('v') if key.modifiers.contains(M::CONTROL) => {
+                    self.input.push_str(&self.clipboard)
                 }
                 K::Backspace => {
                     self.input.pop();
@@ -496,12 +1373,30 @@ impl App {
                 self.palette = Some(0);
                 return;
             }
+            K::F(7) => {
+                self.table_toggle();
+                return;
+            }
+            K::F(8) if self.view == View::Table => {
+                self.command("Delete record");
+                return;
+            }
+            K::F(9) if self.view == View::Table => {
+                self.command("Append record");
+                return;
+            }
             K::F(6) => {
                 self.explorer = !self.explorer;
                 return;
             }
             K::F(2) => {
-                self.view = View::Editor;
+                self.view = if self.tabs[self.tab].spreadsheet {
+                    View::Sheet
+                } else if self.tabs[self.tab].raw {
+                    View::Table
+                } else {
+                    View::Editor
+                };
                 self.explorer = false;
                 return;
             }
@@ -600,6 +1495,51 @@ impl App {
                     }
                 }
                 _ => {}
+            }
+            return;
+        }
+        if self.view == View::Sheet {
+            self.sheet_key(key);
+            return;
+        }
+        if self.view == View::Table {
+            self.table_key(key);
+            return;
+        }
+        if self.view == View::Diff {
+            if let Some(diff) = &mut self.comparison {
+                let result = match key.code {
+                    K::Char('n') => diff.jump(false),
+                    K::Char('p') => diff.jump(true),
+                    K::Up => {
+                        diff.top = diff.top.saturating_sub(1);
+                        Ok(())
+                    }
+                    K::Down => {
+                        diff.top = (diff.top + 1).min(diff.index.rows.saturating_sub(1));
+                        Ok(())
+                    }
+                    K::PageUp => {
+                        diff.top = diff.top.saturating_sub(20);
+                        Ok(())
+                    }
+                    K::PageDown => {
+                        diff.top = (diff.top + 20).min(diff.index.rows.saturating_sub(1));
+                        Ok(())
+                    }
+                    K::Home => {
+                        diff.top = 0;
+                        Ok(())
+                    }
+                    K::End => {
+                        diff.top = diff.index.rows.saturating_sub(1);
+                        Ok(())
+                    }
+                    _ => Ok(()),
+                };
+                if let Err(e) = result {
+                    self.status = e.to_string();
+                }
             }
             return;
         }
@@ -746,12 +1686,20 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            let _ = crossterm::execute!(std::io::stdout(), event::DisableBracketedPaste);
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                event::DisableBracketedPaste,
+                event::DisableMouseCapture
+            );
             ratatui::restore();
         }
     }
     let _restore = Restore;
-    crossterm::execute!(std::io::stdout(), event::EnableBracketedPaste)?;
+    crossterm::execute!(
+        std::io::stdout(),
+        event::EnableBracketedPaste,
+        event::EnableMouseCapture
+    )?;
     // Initial explorer loading completes before opening the command-line file.
     let mut initial = initial;
     let mut dirty = true;
@@ -770,6 +1718,7 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
         if event::poll(Duration::from_millis(30))? {
             dirty = true;
             match event::read()? {
+                Event::Mouse(mouse) => app.mouse(mouse),
                 Event::Key(key) => app.key(key),
                 Event::Paste(text) => {
                     if app.palette.is_some() {
@@ -780,6 +1729,15 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                         if let Some(shell) = &mut app.shell {
                             let bytes = yy_term::keys::paste(&text, shell.screen.modes());
                             shell.send(&bytes)?;
+                        }
+                    } else if app.view == View::Sheet && !app.explorer {
+                        app.book_op(workbook::Op::Paste(text));
+                    } else if app.view == View::Table && !app.explorer {
+                        let e = &mut app.tabs[app.tab];
+                        if let Some(grid) = &mut e.table
+                            && let Err(error) = grid.paste(&mut e.doc, &text)
+                        {
+                            app.status = error.to_string();
                         }
                     } else if app.view == View::Editor && !app.explorer {
                         app.tabs[app.tab].doc.paste(&text);
@@ -846,7 +1804,35 @@ mod tests {
             let mut app = App::new(std::env::current_dir()?);
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))?;
-            for view in [View::Editor, View::Git, View::Preview, View::Help] {
+            app.tabs[0].doc.insert_text("id,note\n1,example\n", false);
+            let mut grid = data::Grid::new(data::Mode::Delimited(yy_delimited::Dialect::csv()));
+            grid.page = Some(data::read_page(
+                app.tabs[0].doc.snapshot(),
+                app.tabs[0].doc.version(),
+                &grid.mode,
+                0,
+            )?);
+            grid.row = 1;
+            grid.col = 1;
+            app.tabs[0].table = Some(grid);
+            let mut b = workbook::Book::empty()?;
+            b.apply(workbook::Op::Set("multiple\nlines".into()))?;
+            b.apply(workbook::Op::Height(3))?;
+            app.tabs[0].book = Some(b);
+            app.comparison = Some(diff::Comparison::new(
+                yy_buffer::Snapshot::from_bytes(b"left\n"),
+                yy_buffer::Snapshot::from_bytes(b"right\n"),
+                "test".into(),
+            )?);
+            for view in [
+                View::Sheet,
+                View::Diff,
+                View::Editor,
+                View::Table,
+                View::Git,
+                View::Preview,
+                View::Help,
+            ] {
                 app.view = view;
                 terminal.draw(|f| draw(f, &mut app))?;
                 app.palette = Some(0);
@@ -921,6 +1907,186 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
         terminal.draw(|f| draw(f, &mut app))?;
         assert!(app.tabs[0].top > 90_000);
+        Ok(())
+    }
+    #[test]
+    fn table_key_workflow_and_save_queued_during_page_load() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("test.csv");
+        std::fs::write(&path, b"id,note\r\n1,original\r\n")?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.open(path.clone());
+        wait(&mut app);
+        app.key(KeyEvent::new(K::F(7), M::NONE));
+        app.poll();
+        wait(&mut app);
+        assert!(app.view == View::Table);
+        app.key(KeyEvent::new(K::Down, M::NONE));
+        app.key(KeyEvent::new(K::Right, M::NONE));
+        app.key(KeyEvent::new(K::Enter, M::NONE));
+        assert_eq!(app.input, "original");
+        app.key(KeyEvent::new(K::Char('a'), M::CONTROL));
+        assert!(app.input.is_empty());
+        app.input = "changed,\nline".into();
+        app.key(KeyEvent::new(K::Enter, M::NONE));
+        app.poll();
+        assert!(app.busy);
+        app.key(KeyEvent::new(K::Char('s'), M::CONTROL));
+        assert_eq!(app.pending_saves.len(), 1);
+        wait(&mut app);
+        assert_eq!(
+            std::fs::read(&path)?,
+            b"id,note\r\n1,\"changed,\nline\"\r\n"
+        );
+        assert!(!app.tabs[0].modified());
+        app.key(KeyEvent::new(K::Char('z'), M::CONTROL));
+        app.poll();
+        wait(&mut app);
+        assert!(app.tabs[0].modified());
+        assert_eq!(
+            app.tabs[0]
+                .doc
+                .snapshot()
+                .read(0..app.tabs[0].doc.snapshot().len()),
+            b"id,note\r\n1,original\r\n"
+        );
+        Ok(())
+    }
+    #[test]
+    fn fixed_mode_opens_raw_tab_and_rejects_normal_text_input() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("fixed.dat");
+        let bytes = [b'A', b'B', b'C', b'D', 0x12, 0x34, 0x5c, 0xde, 0xad];
+        std::fs::write(&path, bytes)?;
+        std::fs::write(
+            dir.path().join("record.cpy"),
+            "01 REC.\n 05 ID PIC X(4).\n 05 AMOUNT PIC S9(5) COMP-3.\n",
+        )?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.open(path.clone());
+        wait(&mut app);
+        app.input = "record.cpy;9;MS932;none".into();
+        app.submit(Prompt::Fixed);
+        wait(&mut app);
+        assert!(app.tabs[app.tab].raw);
+        assert!(app.view == View::Table);
+        let before = app.tabs[app.tab].doc.version();
+        app.key(KeyEvent::new(K::F(2), M::NONE));
+        app.key(KeyEvent::new(K::Char('x'), M::NONE));
+        assert_eq!(app.tabs[app.tab].doc.version(), before);
+        app.key(KeyEvent::new(K::Enter, M::NONE));
+        assert_eq!(app.input, "ABCD");
+        app.input = "Q".into();
+        app.key(KeyEvent::new(K::Enter, M::NONE));
+        app.save(path.clone());
+        wait(&mut app);
+        let saved = std::fs::read(&path)?;
+        assert_eq!(&saved[..4], b"Q   ");
+        assert_eq!(&saved[4..], &bytes[4..]);
+        Ok(())
+    }
+    #[test]
+    fn queued_untitled_save_is_not_replaced_by_a_file_open_result() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("input");
+        let output = dir.path().join("output");
+        std::fs::write(&input, b"opened file")?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.open(input.clone());
+        app.save(output.clone());
+        wait(&mut app);
+        assert_eq!(std::fs::read(output)?, b"");
+        assert_eq!(std::fs::read(input)?, b"opened file");
+        assert_eq!(app.tabs.len(), 2);
+        Ok(())
+    }
+    #[test]
+    fn mouse_rectangle_tracks_resized_row_heights() -> Result<()> {
+        let mut app = App::new(std::env::current_dir()?);
+        wait(&mut app);
+        let mut book = workbook::Book::empty()?;
+        book.apply(workbook::Op::Paste("a\tb\nc\td".into()))?;
+        book.apply(workbook::Op::Height(3))?;
+        book.apply(workbook::Op::Width(12))?;
+        app.tabs[0].book = Some(book);
+        app.tabs[0].spreadsheet = true;
+        app.view = View::Sheet;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 15))?;
+        terminal.draw(|frame| draw(frame, &mut app))?;
+        let first = app
+            .hit_cells
+            .iter()
+            .find(|(_, r, c)| *r == 0 && *c == 0)
+            .unwrap()
+            .0;
+        assert_eq!(first.height, 3);
+        assert_eq!(first.width, 12);
+        let last = app
+            .hit_cells
+            .iter()
+            .find(|(_, r, c)| *r == 1 && *c == 1)
+            .unwrap()
+            .0;
+        for (kind, rect) in [
+            (event::MouseEventKind::Down(event::MouseButton::Left), first),
+            (event::MouseEventKind::Drag(event::MouseButton::Left), last),
+        ] {
+            app.mouse(event::MouseEvent {
+                kind,
+                column: rect.x,
+                row: rect.y + rect.height - 1,
+                modifiers: M::NONE,
+            });
+        }
+        assert_eq!(app.tabs[0].book.as_ref().unwrap().copy()?, "a\tb\nc\td");
+        Ok(())
+    }
+    #[test]
+    fn original_fixed_export_and_shared_diff_workers_keep_snapshots_alive() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("raw.dat");
+        let raw = b"AB\x00\xff";
+        std::fs::write(&path, raw)?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        let mut editor = Editor::open_raw(&path)?;
+        let spec = yy_sheet::fixed::FixedSpec::new(
+            "01 REC.\n 05 ID PIC X(4).\n",
+            yy_cobol::Codec {
+                charset: yy_cobol::Charset::Ms932,
+                little_endian: false,
+            },
+            yy_sheet::fixed::RecordSep::None,
+        )
+        .map_err(anyhow::Error::msg)?;
+        editor.table = Some(data::Grid::new(data::Mode::Fixed(std::sync::Arc::new(
+            spec,
+        ))));
+        app.tabs = vec![editor];
+        app.tab = 0;
+        let out = dir.path().join("out.dat");
+        app.export_raw_fixed(out.clone());
+        wait(&mut app);
+        assert_eq!(std::fs::read(&out)?, raw);
+        app.diff_file(out);
+        wait(&mut app);
+        assert!(app.view == View::Diff);
+        let d = app.comparison.as_mut().context("Missing diff")?;
+        assert_eq!(d.index.changes, 0);
+        assert_eq!(d.rows(1)?.len(), 1);
+        let text = dir.path().join("right.txt");
+        std::fs::write(&text, b"right\n")?;
+        app.tabs = vec![Editor::empty()];
+        app.tabs[0].doc = yy_core::Document::from_text("left\n");
+        app.diff_file(text);
+        wait(&mut app);
+        let d = app.comparison.as_mut().context("Missing diff")?;
+        let row = d.rows(1)?[0];
+        assert_eq!(d.text(row, false), "right↵");
+        assert_eq!(d.text(row, true), "left↵");
         Ok(())
     }
     #[test]

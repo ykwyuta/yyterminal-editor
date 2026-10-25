@@ -51,6 +51,7 @@ fn markdown(text: &str) -> Vec<Line<'static>> {
     lines
 }
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
+    app.hit_cells.clear();
     let [header, body, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -58,7 +59,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(frame.area());
     frame.render_widget(
-        Paragraph::new("yyte  F1 Menu  F2 Editor  F3 Git  F4 Terminal  F5 Preview  F6 Explorer"),
+        Paragraph::new("yyte F1 Menu F2 Edit F3 Git F4 Shell F5 MD F6 Files F7 Table"),
         header,
     );
     let show_explorer = body.width >= 65 || app.explorer;
@@ -99,7 +100,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
     let title = match app.view {
-        View::Editor => app
+        View::Editor | View::Table | View::Sheet => app
             .tabs
             .iter()
             .enumerate()
@@ -119,6 +120,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             .join(" "),
         View::Terminal => "Terminal".into(),
         View::Git => "Git".into(),
+        View::Diff => "yymerge comparison".into(),
         View::Preview => "Markdown preview".into(),
         View::Help => "Help".into(),
     };
@@ -127,6 +129,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(border, right);
     if inner.width > 0 && inner.height > 0 {
         match app.view {
+            View::Diff => draw_diff(frame, app, inner),
+            View::Sheet => draw_book(frame, app, inner),
+            View::Table => draw_grid(frame, app, inner),
             View::Editor => {
                 let e = &mut app.tabs[app.tab];
                 let at = e.caret();
@@ -233,7 +238,11 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             "{}{} | {} | byte {}/{}",
             if app.busy { "[Working] " } else { "" },
             app.status,
-            app.tabs[app.tab].doc.encoding().name(),
+            if app.tabs[app.tab].raw {
+                "raw bytes"
+            } else {
+                app.tabs[app.tab].doc.encoding().name()
+            },
             app.tabs[app.tab].caret(),
             app.tabs[app.tab].doc.snapshot().len()
         )),
@@ -277,11 +286,42 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 Some(Prompt::Save) => "Save as path (new file)",
                 Some(Prompt::Find) => "Find next text (16 MiB)",
                 Some(Prompt::Commit) => "Commit staged changes: message",
+                Some(Prompt::LayoutOpen) => "Apply .yyl layout path to current data file",
+                Some(Prompt::LayoutSave) => "Save layout to a NEW .yyl path",
+                Some(Prompt::LayoutInfer) => {
+                    "Infer: LENGTH or auto;MS932 or IBM-xxx;none/crlf/lf/nl"
+                }
+                Some(Prompt::BookCell) => "Cell / formula: Ctrl+A clears; Enter applies",
+                Some(Prompt::BookFilter) => "Wildcard filter on current column (* and ?)",
+                Some(Prompt::BookFill) => "Additional rows to autofill from selection",
+                Some(Prompt::BookHeight) => "Row height: 1..20 terminal lines",
+                Some(Prompt::FixedExport) => "Export fixed-length data to a NEW path",
+                Some(Prompt::DiffPath) => "yymerge: compare current buffer with file path",
+                Some(Prompt::BookWidth) => "Column width: 4..80 terminal cells",
+                Some(Prompt::BookFormat) => "Excel number format (e.g. #,##0.00)",
+                Some(Prompt::BookSheet) => "New sheet name",
+                Some(Prompt::BookMove) => "Move selected column to (A,B,...)",
+                Some(Prompt::BookLayout) => "Layout name for the selected record",
+                Some(Prompt::BookExport) => "Export active sheet to a new CSV path",
+                Some(Prompt::Cell) => "Edit cell: Ctrl+A clear / Alt+Enter newline / Enter apply",
+                Some(Prompt::Fixed) => "COPYBOOK;RECORD_BYTES;CHARSET;SEPARATOR",
+                Some(Prompt::Delimiter) => "Delimiter (e.g. , or \\t or |)",
                 Some(Prompt::Encoding) => "Next open: auto, CP932, IBM-930/fixed:80, ...",
                 _ => "Unsaved changes: type discard to quit",
             };
+            let displayed = app
+                .input
+                .chars()
+                .map(|c| match c {
+                    '\n' => '↵',
+                    '\r' => '␍',
+                    '\t' => '→',
+                    c if c.is_control() => '�',
+                    c => c,
+                })
+                .collect::<String>();
             frame.render_widget(
-                Paragraph::new(app.input.as_str()).block(block(title, true)),
+                Paragraph::new(displayed.as_str()).block(block(title, true)),
                 rect,
             );
             if rect.width > 2 && rect.height > 2 {
@@ -296,4 +336,364 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             }
         }
     }
+}
+
+fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
+    use ratatui::widgets::{Cell, Row, Table};
+    let editor = &mut app.tabs[app.tab];
+    let Some(grid) = &mut editor.table else {
+        frame.render_widget(
+            Paragraph::new("F7: CSV/TSV table; menu: Fixed-length table"),
+            area,
+        );
+        return;
+    };
+    let Some(page) = &grid.page else {
+        frame.render_widget(
+            Paragraph::new(grid.error.as_deref().unwrap_or("Loading table page...")),
+            area,
+        );
+        return;
+    };
+    let visible_rows = (area.height.saturating_sub(3) / grid.height).max(1) as usize;
+    grid.top = grid.top.min(grid.row);
+    if grid.row >= grid.top + visible_rows {
+        grid.top = grid.row + 1 - visible_rows;
+    }
+    let visible_cols = (area.width.saturating_sub(8) / (grid.width + 1)).max(1) as usize;
+    grid.left = grid.left.min(grid.col);
+    if grid.col >= grid.left + visible_cols {
+        grid.left = grid.col + 1 - visible_cols;
+    }
+    let columns = page.rows.iter().map(|r| r.fields.len()).max().unwrap_or(1);
+    let headers = grid.mode.headers(columns);
+    let header = Row::new(
+        std::iter::once("Record".to_owned())
+            .chain(headers.into_iter().skip(grid.left).take(visible_cols)),
+    )
+    .style(Style::default().fg(Color::Cyan));
+    let rows = page
+        .rows
+        .iter()
+        .enumerate()
+        .skip(grid.top)
+        .take(visible_rows)
+        .map(|(r, row)| {
+            let mut cells = vec![Cell::from((grid.base + r as u64 + 1).to_string())];
+            for col in grid.left..(grid.left + visible_cols).min(row.fields.len()) {
+                let text = wrap_cell(&grid.value_at(row, col), grid.width, grid.height);
+                let cell = Cell::from(text);
+                let (t, l, b, rr) = grid.rectangle();
+                cells.push(if r >= t && r <= b && col >= l && col <= rr {
+                    cell.style(Style::default().bg(Color::Blue).fg(Color::White))
+                } else {
+                    cell
+                });
+            }
+            Row::new(cells).height(grid.height)
+        });
+    let widths = std::iter::once(Constraint::Length(7))
+        .chain((0..visible_cols).map(|_| Constraint::Length(grid.width)));
+    let [label, table, detail] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    for (n, _) in page
+        .rows
+        .iter()
+        .enumerate()
+        .skip(grid.top)
+        .take(visible_rows)
+    {
+        for c in grid.left..(grid.left + visible_cols).min(columns) {
+            let x = table.x + 8 + (c - grid.left) as u16 * (grid.width + 1);
+            let y = table.y + 1 + (n - grid.top) as u16 * grid.height;
+            if x < table.right() && y < table.bottom() {
+                app.hit_cells.push((
+                    Rect::new(
+                        x,
+                        y,
+                        grid.width.min(table.right() - x),
+                        grid.height.min(table.bottom() - y),
+                    ),
+                    n as u64,
+                    c as u32,
+                ));
+            }
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} / Enter: edit / PgUp,PgDn: page",
+            grid.mode.name()
+        )),
+        label,
+    );
+    frame.render_widget(
+        Table::new(rows, widths).header(header).column_spacing(1),
+        table,
+    );
+    let info = if !page.notice.is_empty() {
+        page.notice.clone()
+    } else {
+        format!(
+            "Record {} / column {} | F8 delete / F9 append / F7 text",
+            grid.base + grid.row as u64 + 1,
+            grid.col + 1
+        )
+    };
+    frame.render_widget(Paragraph::new(info), detail);
+}
+
+fn draw_book(frame: &mut Frame, app: &mut App, area: Rect) {
+    use ratatui::widgets::{Cell, Row, Table};
+    let Some(book) = &mut app.tabs[app.tab].book else {
+        frame.render_widget(Paragraph::new("Working on workbook..."), area);
+        return;
+    };
+    let visible = area.height.saturating_sub(3).max(1) as u64;
+    book.top = book.top.min(book.row);
+    if book.row >= book.top + visible {
+        book.top = book.row + 1 - visible;
+    }
+    while (book.top..=book.row)
+        .take(visible as usize + 1)
+        .map(|r| u64::from(book.row_height(r)))
+        .sum::<u64>()
+        > visible
+        && book.top < book.row
+    {
+        book.top += 1;
+    }
+    let mut row_sizes = vec![];
+    let mut remaining = visible as u16;
+    for r in book.top..book.top + visible {
+        let height = book.row_height(r).min(remaining);
+        if height == 0 {
+            break;
+        }
+        row_sizes.push((r, height));
+        remaining -= height;
+    }
+    book.left = book.left.min(book.col);
+    let mut columns = vec![];
+    let mut used = 8;
+    let mut col = book.left;
+    while used + 4 < u32::from(area.width)
+        && col
+            < if book.current().fixed.is_some() {
+                book.data_cols()
+            } else {
+                16384
+            }
+    {
+        let width = book
+            .current()
+            .col_widths
+            .get(&col)
+            .copied()
+            .unwrap_or(16.0)
+            .clamp(4.0, 80.0) as u16;
+        if used + u32::from(width) + 1 > u32::from(area.width) && !columns.is_empty() {
+            break;
+        }
+        columns.push((col, width));
+        used += u32::from(width) + 1;
+        col += 1;
+    }
+    if !columns.iter().any(|(c, _)| *c == book.col) {
+        book.left = book.col;
+        columns.clear();
+        columns.push((book.col, area.width.saturating_sub(9).max(4)));
+    }
+    let selected = book.range();
+    let sheet = book.current();
+    let [label, grid, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} ({}/{}) | Shift+arrows selects | Enter edits",
+            sheet.name,
+            book.visible_sheets()
+                .iter()
+                .position(|i| *i == book.sheet)
+                .unwrap_or(0)
+                + 1,
+            book.visible_sheets().len()
+        )),
+        label,
+    );
+    let header = Row::new(
+        std::iter::once("Row".to_owned())
+            .chain(columns.iter().map(|(c, _)| yy_sheet::col_name(*c))),
+    )
+    .style(Style::default().fg(Color::Cyan));
+    let rows = row_sizes.iter().map(|&(r, height)| {
+        let mut cells = vec![Cell::from((r + 1).to_string())];
+        for &(c, width) in &columns {
+            let value = book
+                .value(r, c)
+                .map(|v| {
+                    if let (Some(format), Some(n)) = (sheet.style_at(r, c).num_fmt, v.as_number()) {
+                        yy_numfmt::format_number(&format, n, book.doc.book.date_system)
+                    } else {
+                        v.general_text()
+                    }
+                })
+                .unwrap_or_else(|e| format!("#IO:{e}"));
+            let text = wrap_cell(&value, width, height);
+            let source_style = sheet.style_at(r, c);
+            let mut style = Style::default();
+            if source_style.bold == Some(true) {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if source_style.italic == Some(true) {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            let rgb = |n: u32| Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8);
+            if let Some(color) = source_style.color_rgb() {
+                style = style.fg(rgb(color));
+            }
+            if let Some(color) = source_style.fill_rgb() {
+                style = style.bg(rgb(color));
+            }
+            if r >= selected.top
+                && r <= selected.bottom
+                && c >= selected.left
+                && c <= selected.right
+            {
+                style = style.bg(Color::Blue).fg(Color::White);
+            }
+            cells.push(Cell::from(text).style(style));
+        }
+        Row::new(cells).height(height)
+    });
+    let widths = std::iter::once(Constraint::Length(7))
+        .chain(columns.iter().map(|(_, w)| Constraint::Length(*w)));
+    let mut y = grid.y + 1;
+    for &(r, height) in &row_sizes {
+        let mut x = grid.x + 8;
+        for &(c, width) in &columns {
+            if x < grid.right() && y < grid.bottom() {
+                app.hit_cells.push((
+                    Rect::new(
+                        x,
+                        y,
+                        width.min(grid.right() - x),
+                        height.min(grid.bottom() - y),
+                    ),
+                    r,
+                    c,
+                ));
+            }
+            x = x.saturating_add(width + 1);
+        }
+        y = y.saturating_add(height);
+    }
+    frame.render_widget(
+        Table::new(rows, widths).header(header).column_spacing(1),
+        grid,
+    );
+    let entry = book.entry().unwrap_or_default().replace('\n', "↵");
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{}{}: {}",
+            yy_sheet::col_name(book.col),
+            book.row + 1,
+            entry
+        )),
+        footer,
+    );
+    app.editor_area = grid;
+}
+
+fn wrap_cell(value: &str, width: u16, height: u16) -> String {
+    let mut text = String::new();
+    let mut x = 0;
+    let mut y = 0;
+    for c in value.chars() {
+        if c == '\r' {
+            continue;
+        }
+        let c = if c == '\t' {
+            '→'
+        } else if c.is_control() && c != '\n' {
+            '�'
+        } else {
+            c
+        };
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16;
+        if c == '\n' || x + w > width {
+            y += 1;
+            if y >= height {
+                break;
+            }
+            text.push('\n');
+            x = 0;
+            if c == '\n' {
+                continue;
+            }
+        }
+        text.push(c);
+        x += w;
+    }
+    text
+}
+fn draw_diff(frame: &mut Frame, app: &mut App, area: Rect) {
+    let Some(diff) = &mut app.comparison else {
+        return;
+    };
+    let [label, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} | {} rows, {} changed | N/P: difference",
+            diff.title, diff.index.rows, diff.index.changes
+        )),
+        label,
+    );
+    let rows = match diff.rows(body.height as usize) {
+        Ok(rows) => rows,
+        Err(e) => {
+            app.status = e.to_string();
+            return;
+        }
+    };
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
+    let line = |row: yy_merge_core::large::Row, is_left: bool| {
+        let number = if is_left {
+            row.left_line
+        } else {
+            row.right_line
+        };
+        let prefix = if number == yy_merge_core::large::NONE {
+            "       ".into()
+        } else {
+            format!("{:>6} ", number + 1)
+        };
+        let color = match row.kind {
+            yy_merge_core::large::Kind::LeftOnly => Color::Red,
+            yy_merge_core::large::Kind::RightOnly => Color::Green,
+            _ if crate::diff::changed(row.kind) => Color::Yellow,
+            _ => Color::Reset,
+        };
+        Line::styled(
+            format!("{prefix}{}", diff.text(row, is_left)),
+            Style::default().fg(color),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(rows.iter().map(|r| line(*r, true)).collect::<Vec<_>>()),
+        left,
+    );
+    frame.render_widget(
+        Paragraph::new(rows.iter().map(|r| line(*r, false)).collect::<Vec<_>>()),
+        right,
+    );
 }

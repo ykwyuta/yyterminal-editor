@@ -31,4 +31,6 @@ jobs:
             target/release/yyte.exe
             README.md
             COPYING
-            docs/user/help.md
+            docs/user/**
+            docs/developer/**
+            demo/**
