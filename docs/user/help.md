@@ -53,7 +53,8 @@ saving important data.
 Initial limitations: no remote SSH editing yet. Mouse cell selection and
 .yys workbook editing are available; unsupported YY binary formats remain blocked.
 Workspace loading is supported; creating/saving workspaces is not yet.
-Markdown preview is text-only and limited to the first 1 MiB; diagrams/HTML are not executed. Git output is
+Markdown preview is limited to the first 1 MiB; images become pixel art and
+Mermaid becomes ASCII diagrams. HTML/JavaScript are not executed. Git output is
 currently captured in memory. Giant repository diffs are not optimized.
 
 Table editing (F7)
@@ -201,3 +202,51 @@ only visible rows. Lines are displayed up to 4096 bytes; all bytes are
 compared. Newline differences are shown as ␍ and ↵. Raw files without line
 breaks appear as one diff row. Comparison is read-only; merging, intra-line
 highlights and comparison cancellation are not available yet.
+
+
+Markdown images, Mermaid and markdownViewer
+------------------------------------------
+F5 previews the current unsaved Markdown snapshot. Local images resolve
+relative to the Markdown file's directory (untitled: explorer directory).
+PNG/JPEG/WebP/GIF/BMP/ICO are decoded natively; animated GIF shows one frame.
+Colored square pixels use two pixels per terminal cell via the half-block
+character, so no Sixel/Kitty/browser graphics support is required. Truecolor
+terminals give the best results. Transparent pixels blend on a dark base.
+SVG, embedded HTML images and video are not supported; errors remain visible.
+Images fit the current width (max 160 cells) and 32 terminal lines by default.
+F5 rerenders changed image files; terminal resize recalculates image sizing.
+
+Fenced mermaid blocks use a native Rust ASCII conversion engine.
+Flowchart/graph, sequenceDiagram, erDiagram, classDiagram and basic
+stateDiagram/stateDiagram-v2 are supported. Flowchart DAGs use a layered
+layout in TB/TD/BT/LR/RL directions. Cycles and wide diagrams use a catalogue
+of boxes and arrow cards with matching node IDs. Sequence diagrams use
+participant lifelines and messages; ER/class display relationships and
+attribute/member lists. Appearance and layout intentionally differ from Web
+Mermaid. Shapes become boxes; colors/styles are omitted with a note. Subgraph
+names are retained as notes. Unsupported syntax/diagram types show the
+original source with a reason instead of inventing or hiding its meaning.
+Limits: 64 nodes, 128 edges; dense sequence diagrams may fall back to source.
+
+Standalone examples (install with cargo install --path . --locked):
+    markdownViewer README.md
+    markdownViewer --plain --width 100 demo/markdown-preview.md
+    markdownViewer --print --color demo/markdown-preview.md
+    cat README.md | markdownViewer --plain -
+Interactive: arrows/PgUp/PgDn/Space/Home/End scroll; Left/Right pan;
+q/Esc or Ctrl+C exits. Redirected output defaults to plain text with ASCII
+image shading. --plain explicitly selects this mode. --color enables
+truecolor half-blocks for printed output. --print avoids the interactive UI.
+--base-dir DIR overrides relative image paths; --image-height N sets 1..120
+terminal lines. Input is UTF-8, at most 1 MiB (BOM supported).
+
+HTTP/HTTPS images require explicit opt-in: command Preview remote images in
+yyte, or --remote-images in markdownViewer. Otherwise a placeholder explains
+why the image is blocked. Downloads use TLS validation, a 5-second timeout,
+at most 3 redirects and 20 MiB per resource. Local/data:base64 images have
+the same 20 MiB cap; decoded images are limited to 8192x8192 and 64 MiB.
+At most 16 image references and 20,000 output lines are rendered per preview.
+Do not enable remote images if the document's URLs should not be contacted.
+
+See docs/user/markdown-viewer.md and demo/markdown-preview.md for examples,
+syntax coverage and the native renderer's differences from browser Mermaid.

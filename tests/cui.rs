@@ -148,13 +148,16 @@ struct Harness {
 }
 impl Harness {
     fn new(path: &std::path::Path) -> Result<Self> {
+        Self::with_exe(path, env!("CARGO_BIN_EXE_yyte"))
+    }
+    fn with_exe(path: &std::path::Path, exe: &str) -> Result<Self> {
         let pair = portable_pty::native_pty_system().openpty(PtySize {
             cols: 100,
             rows: 30,
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_yyte"));
+        let mut command = CommandBuilder::new(exe);
         command.arg(path);
         command.cwd(path.parent().unwrap());
         command.env("TERM", "xterm-256color");
@@ -408,4 +411,59 @@ fn interactive_workbook_sizes_formulas_save_and_yymerge_diff() -> Result<()> {
     app.send(b"\x1bOQ")?;
     app.wait("B2: =2*3")?;
     app.finish()
+}
+
+#[test]
+fn interactive_preview_renders_local_pixels_and_mermaid() -> Result<()> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("demo/markdown-preview.md");
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.send(b"\x1b[15~")?;
+    app.wait("Markdown preview ready")?;
+    app.wait("Image: Pixel house")?;
+    app.send(b"\x1b[6~")?;
+    app.wait("Connections:")?;
+    app.send(b"\x1bOQ")?;
+    app.wait("Terminal Markdown preview")?;
+    app.finish()
+}
+
+#[test]
+fn standalone_interactive_preview_resizes_and_exits() -> Result<()> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("demo/markdown-preview.md");
+    let mut app = Harness::with_exe(&path, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    app.wait("Ready")?;
+    app.wait("Image: Pixel house")?;
+    app._master.resize(PtySize {
+        cols: 60,
+        rows: 18,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+    app.screen.resize(60, 18);
+    app.wait_for("resized viewer", |s| {
+        s.rows() == 18 && s.screen_text().contains("60 cols") && s.screen_text().contains("Ready")
+    })?;
+    app.send(b"q")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = app.child.try_wait()? {
+            ensure!(status.success(), "Viewer exit failed");
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Viewer did not exit: {}",
+            app.screen.screen_text()
+        );
+        if let Ok(bytes) = app
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            app.screen.feed(&bytes);
+        }
+    }
+    Ok(())
 }

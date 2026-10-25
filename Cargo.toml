@@ -4,10 +4,15 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
+default-run = "yyte"
 
 [[bin]]
 name = "yyte"
 path = "src/main.rs"
+
+[[bin]]
+name = "markdownViewer"
+path = "src/bin/markdown_viewer.rs"
 
 [dependencies]
 anyhow = "1"
@@ -31,3 +36,6 @@ yy-formula = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6
 yy-numfmt = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
 base64 = "0.22"
 yy-merge-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "a5c7fa2a43ec6ff531426610133688ff3875d3ff" }
+
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

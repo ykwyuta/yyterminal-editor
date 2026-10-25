@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::path::Path;
@@ -12,43 +12,6 @@ fn block(title: impl Into<String>, active: bool) -> Block<'static> {
     Block::bordered()
         .title(title.into())
         .border_style(Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }))
-}
-fn markdown(text: &str) -> Vec<Line<'static>> {
-    use pulldown_cmark::{Event as E, Tag, TagEnd};
-    let mut lines = Vec::new();
-    let mut spans = Vec::new();
-    let mut heading = false;
-    let mut code = false;
-    for event in pulldown_cmark::Parser::new_ext(text, pulldown_cmark::Options::all()) {
-        match event {
-            E::Start(Tag::Heading { .. }) => heading = true,
-            E::Start(Tag::CodeBlock(_)) => code = true,
-            E::Text(t) | E::Code(t) => spans.push(Span::styled(
-                t.into_string(),
-                Style::default().fg(if code {
-                    Color::Yellow
-                } else if heading {
-                    Color::Cyan
-                } else {
-                    Color::White
-                }),
-            )),
-            E::SoftBreak | E::HardBreak => {
-                lines.push(Line::from(std::mem::take(&mut spans)));
-            }
-            E::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::Item) => {
-                lines.push(Line::from(std::mem::take(&mut spans)));
-                heading = false;
-                code = false;
-            }
-            E::Start(Tag::Item) => spans.push(Span::raw("* ")),
-            _ => {}
-        }
-    }
-    if !spans.is_empty() {
-        lines.push(Line::from(spans));
-    }
-    lines
 }
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     app.hit_cells.clear();
@@ -220,14 +183,15 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 inner,
             ),
             View::Preview => {
-                let e = &app.tabs[app.tab];
-                let snap = e.doc.snapshot();
-                let text = String::from_utf8_lossy(&snap.read(0..snap.len().min(1024 * 1024)))
-                    .into_owned();
+                app.request_preview(inner.width);
                 frame.render_widget(
-                    Paragraph::new(markdown(&text))
-                        .wrap(Wrap { trim: false })
-                        .scroll((app.scroll, 0)),
+                    Paragraph::new(if app.preview_pending {
+                        vec![Line::raw("Rendering Markdown...")]
+                    } else {
+                        app.preview.lines.clone()
+                    })
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.scroll, 0)),
                     inner,
                 );
             }

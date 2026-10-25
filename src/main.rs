@@ -73,6 +73,7 @@ const COMMANDS: &[&str] = &[
     "Git unstage all",
     "Git commit",
     "Markdown preview",
+    "Preview remote images",
     "Help",
     "Quit",
 ];
@@ -88,6 +89,7 @@ enum View {
     Help,
 }
 enum Message {
+    Preview(yyterminal_editor::preview::Rendered),
     Open(Box<Result<Editor>>),
     Fixed(Box<Result<Editor>>),
     Workbook(Box<Result<Editor>>),
@@ -152,6 +154,10 @@ struct App {
     term_back: usize,
     clipboard: String,
     output: String,
+    preview: yyterminal_editor::preview::Rendered,
+    preview_pending: bool,
+    preview_key: Option<(usize, yy_core::Version, u16, bool)>,
+    preview_remote: bool,
     comparison: Option<diff::Comparison>,
     scroll: u16,
     status: String,
@@ -184,6 +190,10 @@ impl App {
             term_back: 0,
             clipboard: String::new(),
             output: String::new(),
+            preview: Default::default(),
+            preview_pending: false,
+            preview_key: None,
+            preview_remote: false,
             comparison: None,
             scroll: 0,
             status: "F1: commands / help   F6: explorer   F4: terminal".into(),
@@ -201,6 +211,45 @@ impl App {
         };
         app.read_dir(app.root.clone());
         app
+    }
+    fn request_preview(&mut self, width: u16) {
+        let width = width.clamp(1, 240);
+        let key = (
+            self.tab,
+            self.tabs[self.tab].doc.version(),
+            width,
+            self.preview_remote,
+        );
+        if self.preview_pending || self.preview_key == Some(key) {
+            return;
+        }
+        self.preview_key = Some(key);
+        self.preview_pending = true;
+        let snapshot = self.tabs[self.tab].doc.snapshot().clone();
+        let base = self.tabs[self.tab]
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&self.root)
+            .to_owned();
+        let mut opts = yyterminal_editor::preview::Options::new(base, width);
+        opts.remote_images = self.preview_remote;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let bytes = snapshot.read(
+                0..snapshot
+                    .len()
+                    .min(yyterminal_editor::preview::MAX_MARKDOWN as u64),
+            );
+            let text = String::from_utf8_lossy(&bytes);
+            let mut rendered = yyterminal_editor::preview::render(&text, &opts);
+            if snapshot.len() > bytes.len() as u64 {
+                rendered
+                    .lines
+                    .push(ratatui::text::Line::raw("[Markdown truncated at 1 MiB]"));
+            }
+            let _ = tx.send(Message::Preview(rendered));
+        });
     }
     fn read_dir(&mut self, path: PathBuf) {
         if self.busy {
@@ -438,8 +487,20 @@ impl App {
         let mut changed = false;
         while let Ok(message) = self.rx.try_recv() {
             changed = true;
+            let message = match message {
+                Message::Preview(rendered) => {
+                    self.preview = rendered;
+                    self.preview_pending = false;
+                    if self.view == View::Preview {
+                        self.status = "Markdown preview ready".into();
+                    }
+                    continue;
+                }
+                other => other,
+            };
             self.busy = false;
             let result: Result<()> = match message {
+                Message::Preview(_) => unreachable!(),
                 Message::Workbook(result)=>(*result).map(|editor|{self.tabs.push(editor);self.tab=self.tabs.len()-1;self.view=View::Sheet;self.explorer=false;self.status="Spreadsheet ready (yysheet engine)".into();}),
                 Message::BookOp{tab,book,result}=>{
                     self.tabs[tab].path=book.path.clone();self.tabs[tab].digest=book.digest;self.tabs[tab].book=Some(*book);
@@ -1073,7 +1134,13 @@ impl App {
             "Git stage all" => self.git(vec!["add".into(), "--all".into()]),
             "Git unstage all" => self.git(vec!["reset".into(), "--mixed".into(), "HEAD".into()]),
             "Git commit" => self.ask(Prompt::Commit),
+            "Preview remote images" => {
+                self.preview_remote = !self.preview_remote;
+                self.preview_key = None;
+                self.status = format!("Remote preview images: {}", self.preview_remote);
+            }
             "Markdown preview" => {
+                self.preview_key = None;
                 self.view = View::Preview;
                 self.explorer = false;
                 self.scroll = 0;

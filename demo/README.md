@@ -29,3 +29,8 @@
 - Shift+矢印またはマウスのドラッグで範囲選択し、`Column width` と `Row height` で寸法を変更できます。ブックでは `.yys` に寸法も保存されます。
 - 固定長の表またはブックで `Export fixed-length` を選び、新しい出力先を指定します。未編集の元バイトと固定長の位置関係が保持されます。ブックではソート・フィルターの表示順が出力対象です。
 - `Compare file (yymerge)` で比較先を指定すると左右比較になります。N/Pで差分へ移動、F2で編集へ戻ります。数値や文字を変更したコピーと元データを比べられます。
+
+
+## 画像とMermaid
+
+`markdown-preview.md` を開いてF5を押すと、同じフォルダーのPNGがドット絵になり、フローチャート・シーケンス・ER・状態遷移がASCIIで表示されます。`cargo run --locked --bin markdownViewer -- demo/markdown-preview.md` で単独ビューアーでも試せます。`--plain` を付けると非対話のテキスト出力になります。
