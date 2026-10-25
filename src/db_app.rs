@@ -2158,7 +2158,15 @@ mod tests {
         assert!(app.tabs[app.tab].database);
         app.command("DB Connect");
         idle(&mut app);
-        assert!(app.status.starts_with("Connected:"));
+        // Initial folder loading can replace the transient status after the DB reply.
+        // Assert the persistent connection state rather than that notification.
+        let connection = app.db.as_ref().unwrap();
+        assert_eq!(
+            connection.active, "SQLite / memory",
+            "{}: {}",
+            app.status, connection.messages
+        );
+        assert!(connection.cancellation.is_some());
         app.tabs[app.tab].doc.insert_text("SELECT 9223372036854775807 AS exact_integer, '東京' AS city UNION ALL SELECT 42,'大阪';",false);
         app.command("DB Execute");
         idle(&mut app);
