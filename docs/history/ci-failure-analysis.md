@@ -11,3 +11,13 @@
 再発防止: タブ名など複数の表示モードに共通する文字列を、ビュー切り替え完了の単独条件にしない。実際のビュー見出しと操作結果の内容を組み合わせ、共通の端末応答・状態待機を利用する。修正後の検証結果は以下へ追記する。
 
 ローカル検証: 修正後のWindowsでfmt・Clippy・66試験、Linuxコンテナでfmt・Clippy・80試験（対象のサイズ変更・終了試験を含む）が成功した。GitHub CIについては修正コミットの完了結果を確認してリリースする。
+
+## 2026-10-25: Windows ARM64のVS 2026と同梱fmtの非互換
+
+実行: [CI 40189188137 / Windows ARM64](https://github.com/ykwyuta/yyterminal-editor/actions/runs/40189188137/job/121156326216)。対象SHA `e39dee58cf36c613df885002af11a77fced69e55`。Clippyに先行するlibduckdb-sys 1.4.1のC++コンパイルで失敗した。
+
+確認済み: `windows-11-arm` は `windows-11-vs2026-arm64` 20261022.194.1で動き、MSVC 14.51が選ばれた。DuckDB同梱のfmt/format.hは `_SECURE_SCL` が定義されていると削除済みの `stdext::checked_array_iterator` を参照し、C2653・C2061などで失敗する。Rustの警告や製品の描画処理が原因ではない。[GitHub公式のイメージ移行告知](https://github.com/actions/runner-images/issues/14602) と [公式イメージ構成](https://github.com/actions/runner-images/blob/main/images/windows/Windows11-VS2026-Arm64-Readme.md) を確認した。
+
+対応: イメージに併設されているMSVC 14.44（v143）のARM64ホスト・ARM64ターゲットの開発環境を明示的に選択する。該当コンポーネントがなければ失敗させ、別のコンパイラーへ暗黙フォールバックしない。PATH・INCLUDE・LIB等とツールセット版をCargoへ引き継ぎ、ARMのC++ビルドキャッシュキーを分ける。x86_64は既存のwindows-2022を維持する。
+
+再発防止: ランナー名が同じでもツールチェーンが同じとはみなさない。C++依存の追加・更新時はARMの実イメージとコンパイラーを確認する。互換性対策を外す場合は同梱DBを含むC++ビルド・テスト・releaseビルド・実行形式と配布検証を再確認する。修正の成否は修正後SHAのCI結果で判断する。

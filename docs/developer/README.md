@@ -153,3 +153,5 @@ Windowsのモデル／画面バッファ試験のほか、Linux実端末試験�
 実DBの画面例を更新する場合は `python tools/render_plan_examples.py target/database-live/<成功した実行時刻>` を使います。本体の描画関数から利用者向けSVG・テキストを生成します。
 
 - [描画性能の測定とキャッシュ検証](render-performance.md)
+
+Windows ARM64の `windows-11-arm` はVS 2026へ移行しているため、同梱DuckDB 1.4.1のfmtと互換性のある併設v143（MSVC 14.44）をVsDevCmdで選択する。ARM64ホスト・ARM64ターゲット、PATH／INCLUDE／LIBとVCToolsVersionを維持し、CIが出力する版を確認する。コンポーネント不在は準備失敗とする。

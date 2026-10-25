@@ -35,12 +35,30 @@ jobs:
         with:
           toolchain: 1.99.0-${{ matrix.target }}
           components: rustfmt, clippy
+      - name: Select compatible native ARM64 C++ toolset
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64 -property installationPath
+          if (-not $vs) { throw 'Native ARM64 MSVC 14.44 toolset is required for bundled DuckDB 1.4.1' }
+          $devcmd = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          $lines = & cmd.exe /d /s /c "`"$devcmd`" -no_logo -arch=arm64 -host_arch=arm64 -vcvars_ver=14.44 >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to initialize MSVC 14.44 ARM64 environment' }
+          $names = @('PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'VSINSTALLDIR', 'VCINSTALLDIR', 'VCToolsInstallDir', 'VCToolsVersion', 'WindowsSdkDir', 'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion', 'VSCMD_ARG_TGT_ARCH', 'VSCMD_ARG_HOST_ARCH')
+          foreach ($line in $lines) {
+            $pair = $line -split '=', 2
+            if ($pair.Length -eq 2 -and $pair[0] -in $names) { $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append }
+          }
+          $version = ($lines | Where-Object { $_ -like 'VCToolsVersion=*' }) -replace '^VCToolsVersion=', ''
+          if ($version -notlike '14.44.*') { throw "Unexpected C++ toolset: $version" }
+          Write-Output "Native ARM64 C++ toolset: $version"
       - name: Linux database build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y unixodbc-dev libssl-dev pkg-config cmake
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: yyte-db-${{ runner.os }}-${{ runner.arch }}
+          shared-key: yyte-db-${{ runner.os }}-${{ runner.arch }}${{ matrix.os == 'windows-11-arm' && '-v143' || '' }}
       - run: python -B tools/test_release.py
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
