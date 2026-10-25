@@ -1,4 +1,4 @@
-use crate::{App, COMMANDS, HELP, MouseAction, Prompt, View};
+use crate::{App, HELP, Language, MENUS, MouseAction, Prompt, View, label};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -6,12 +6,67 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::path::Path;
+
 use unicode_width::UnicodeWidthStr;
 fn block(title: impl Into<String>, active: bool) -> Block<'static> {
     Block::bordered()
         .title(title.into())
         .border_style(Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }))
+}
+pub(crate) fn entry_lines(app: &App, index: usize, width: u16) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let Some(path) = app.entries.get(index) else {
+        return vec![];
+    };
+    if width == 0 {
+        return vec![];
+    }
+    let depth = if app.tree {
+        path.strip_prefix(&app.root)
+            .map_or(0, |p| p.components().count().saturating_sub(1))
+    } else {
+        0
+    };
+    let indent = (depth * 2).min(width as usize / 3);
+    let marker = if path.is_dir() {
+        if app.tree && app.expanded.contains(path) {
+            "[-] "
+        } else {
+            "[+] "
+        }
+    } else {
+        "    "
+    };
+    let parent = !app.tree && app.root.parent() == Some(path.as_path());
+    let name = if parent {
+        "[..]".to_owned()
+    } else {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let prefix = format!("{}{}", " ".repeat(indent), if parent { "" } else { marker });
+    // Reserve at least two cells for a wide character even in very narrow panes.
+    let prefix = if prefix.width() + 2 > width as usize {
+        String::new()
+    } else {
+        prefix
+    };
+    let continuation = " ".repeat(prefix.width());
+    let mut line = prefix;
+    let mut result = Vec::new();
+    for ch in name.chars() {
+        let ch = if ch.is_control() { '�' } else { ch };
+        let size = ch.width().unwrap_or(0);
+        if line.width() + size > width as usize && line.width() > continuation.len() {
+            result.push(line);
+            line = continuation.clone();
+        }
+        line.push(ch);
+    }
+    result.push(line);
+    result
 }
 pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     app.hit_cells.clear();
@@ -21,39 +76,57 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     if app.palette.is_none() {
         app.palette_offset = 0;
     }
+    let width = frame.area().width.max(1);
+    let mut header_rows = 1u16;
+    let mut used = 0u16;
+    for menu in MENUS {
+        let text = if app.language == Language::Japanese {
+            menu.japanese
+        } else {
+            menu.name
+        };
+        let size = (text.width() as u16 + 2).min(width);
+        if used + size > width {
+            header_rows += 1;
+            used = 0;
+        }
+        used += size;
+    }
     let [header, tab_bar, body, status] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(header_rows),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    let mut header_text = String::new();
-    for (label, action) in [
-        ("Menu", MouseAction::Key(crossterm::event::KeyCode::F(1))),
-        ("Edit", MouseAction::Key(crossterm::event::KeyCode::F(2))),
-        ("Git", MouseAction::Key(crossterm::event::KeyCode::F(3))),
-        ("Terminal", MouseAction::Run("Terminal")),
-        ("+Terminal", MouseAction::Run("New terminal")),
-        ("Preview", MouseAction::Run("Markdown preview")),
-        ("Split", MouseAction::Run("Split Markdown preview")),
-        ("Files", MouseAction::Key(crossterm::event::KeyCode::F(6))),
-        ("Table", MouseAction::Key(crossterm::event::KeyCode::F(7))),
-    ] {
-        let x = header.x.saturating_add(header_text.len() as u16);
-        if x < header.right() && header.height > 0 {
-            app.mouse_actions.push((
-                Rect::new(x, header.y, (label.len() as u16).min(header.right() - x), 1),
-                action,
-            ));
+    let (mut x, mut y) = (header.x, header.y);
+    for (index, menu) in MENUS.iter().enumerate() {
+        let text = if app.language == Language::Japanese {
+            menu.japanese
+        } else {
+            menu.name
+        };
+        let size = (text.width() as u16 + 2).min(width);
+        if x + size > header.right() {
+            x = header.x;
+            y += 1;
         }
-        header_text.push_str(label);
-        header_text.push(' ');
+        if y < header.bottom() {
+            let area = Rect::new(x, y, size, 1);
+            app.mouse_actions.push((area, MouseAction::Menu(index)));
+            frame.render_widget(
+                Paragraph::new(text).style(Style::default().fg(Color::Cyan).add_modifier(
+                    if app.palette.is_some() && app.menu_group == Some(index) {
+                        Modifier::REVERSED
+                    } else {
+                        Modifier::empty()
+                    },
+                )),
+                area,
+            );
+        }
+        x += size;
     }
-    frame.render_widget(
-        Paragraph::new(header_text).style(Style::default().fg(Color::Cyan)),
-        header,
-    );
     draw_tabs(frame, app, tab_bar);
     app.preview_area = Rect::default();
     let show_explorer = body.width >= 65 || app.explorer;
@@ -63,50 +136,48 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(body);
     if show_explorer {
-        let explorer_inner = block("Explorer", app.explorer).inner(left);
+        let title = match (app.language, app.tree) {
+            (Language::Japanese, true) => "エクスプローラー・ツリー",
+            (Language::Japanese, false) => "エクスプローラー",
+            (_, true) => "Explorer / Tree",
+            (_, false) => "Explorer",
+        };
+        let border = block(title, app.explorer);
+        let inner = border.inner(left);
         app.explorer_area = left;
-        let visible = explorer_inner.height as usize;
-        let start = app.selected.saturating_sub(visible.saturating_sub(1));
-        for (row, i) in (start..app.entries.len()).take(visible).enumerate() {
-            if explorer_inner.width > 0 {
-                app.mouse_actions.push((
-                    Rect::new(
-                        explorer_inner.x,
-                        explorer_inner.y + row as u16,
-                        explorer_inner.width,
-                        1,
-                    ),
-                    MouseAction::Entry(i),
-                ));
+        frame.render_widget(border, left);
+        let mut start = app.selected.min(app.entries.len().saturating_sub(1));
+        let mut height = entry_lines(app, start, inner.width).len();
+        while start > 0 {
+            let previous = entry_lines(app, start - 1, inner.width).len();
+            if height + previous > inner.height as usize {
+                break;
+            }
+            height += previous;
+            start -= 1;
+        }
+        let mut y = inner.y;
+        for index in start..app.entries.len() {
+            for line in entry_lines(app, index, inner.width) {
+                if y >= inner.bottom() || inner.width == 0 {
+                    break;
+                }
+                let area = Rect::new(inner.x, y, inner.width, 1);
+                app.mouse_actions.push((area, MouseAction::Entry(index)));
+                frame.render_widget(
+                    Paragraph::new(line).style(if app.explorer && index == app.selected {
+                        Style::default().bg(Color::Blue)
+                    } else {
+                        Style::default()
+                    }),
+                    area,
+                );
+                y += 1;
+            }
+            if y >= inner.bottom() {
+                break;
             }
         }
-        let items = app
-            .entries
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(visible)
-            .map(|(i, p)| {
-                let label = if p == &app.root.parent().unwrap_or(Path::new("")).to_path_buf() {
-                    "[..]".into()
-                } else {
-                    format!(
-                        "{} {}",
-                        if p.is_dir() { "[+]" } else { "   " },
-                        p.file_name().unwrap_or_default().to_string_lossy()
-                    )
-                };
-                ListItem::new(label).style(if app.explorer && i == app.selected {
-                    Style::default().bg(Color::Blue)
-                } else {
-                    Style::default()
-                })
-            })
-            .collect::<Vec<_>>();
-        frame.render_widget(
-            List::new(items).block(block("Explorer", app.explorer)),
-            left,
-        );
     }
     let title = match app.view {
         View::Editor => "Editor",
@@ -192,13 +263,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 }
             }
             View::Git => frame.render_widget(
-                Paragraph::new(app.output.as_str()).scroll((app.scroll, 0)),
+                Paragraph::new(app.output.as_str())
+                    .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
                 inner,
             ),
             View::Help => frame.render_widget(
                 Paragraph::new(HELP)
                     .wrap(Wrap { trim: false })
-                    .scroll((app.scroll, 0)),
+                    .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
                 inner,
             ),
             View::Preview => draw_preview(frame, app, inner),
@@ -221,7 +293,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     );
     if app.palette.is_some() || app.prompt.is_some() {
         let h = if app.palette.is_some() {
-            (COMMANDS.len() + 2) as u16
+            (app.menu_commands().len() + 2) as u16
         } else {
             5
         };
@@ -235,11 +307,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         app.palette_area = rect;
         frame.render_widget(Clear, rect);
         if let Some(selected) = app.palette {
-            let items = COMMANDS
+            let items = app
+                .menu_commands()
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    ListItem::new(*c).style(if i == selected {
+                    ListItem::new(label(c, app.language)).style(if i == selected {
                         Style::default().bg(Color::Blue)
                     } else {
                         Style::default()
@@ -249,13 +322,32 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             let mut state = ListState::default().with_selected(Some(selected));
             *state.offset_mut() = app.palette_offset;
             frame.render_stateful_widget(
-                List::new(items).block(block("Commands: arrows / Enter / Esc", true)),
+                List::new(items).block(block(
+                    if app.context_path.is_some() {
+                        if app.language == Language::Japanese {
+                            "開くモード"
+                        } else {
+                            "Open as"
+                        }
+                    } else if let Some(group) = app.menu_group {
+                        if app.language == Language::Japanese {
+                            MENUS[group].japanese
+                        } else {
+                            MENUS[group].name
+                        }
+                    } else if app.language == Language::Japanese {
+                        "すべてのコマンド：矢印 / Enter / Esc"
+                    } else {
+                        "Commands: arrows / Enter / Esc"
+                    },
+                    true,
+                )),
                 rect,
                 &mut state,
             );
             app.palette_offset = state.offset();
             let area = block("", true).inner(rect);
-            for (row, i) in (state.offset()..COMMANDS.len())
+            for (row, i) in (state.offset()..app.menu_commands().len())
                 .take(area.height as usize)
                 .enumerate()
             {
@@ -839,14 +931,26 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     app.request_preview(area.width);
+    if !app.preview_pending {
+        app.scroll = app.scroll.min(
+            app.preview
+                .lines
+                .len()
+                .saturating_sub(usize::from(area.height)),
+        );
+        app.preview_left = app.preview_left.min(
+            app.preview
+                .max_left()
+                .saturating_sub(usize::from(area.width)),
+        );
+    }
     frame.render_widget(
         Paragraph::new(if app.preview_pending {
             vec![Line::raw("Rendering Markdown...")]
         } else {
-            app.preview.lines.clone()
-        })
-        .wrap(Wrap { trim: false })
-        .scroll((app.scroll, 0)),
+            app.preview
+                .viewport(app.scroll, app.preview_left, area.width, area.height)
+        }),
         area,
     );
 }

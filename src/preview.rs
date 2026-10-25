@@ -12,9 +12,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-pub const MAX_MARKDOWN: usize = 1024 * 1024;
+pub const MAX_MARKDOWN: usize = 128 * 1024 * 1024;
+pub const MAX_WIDTH: u16 = 4096;
+pub const MAX_IMAGES: usize = 256;
 const MAX_IMAGE: u64 = 20 * 1024 * 1024;
-const MAX_LINES: usize = 20_000;
+pub const MAX_LINES: usize = 1_000_000;
 #[derive(Clone)]
 pub struct Options {
     pub base: PathBuf,
@@ -27,7 +29,7 @@ impl Options {
     pub fn new(base: PathBuf, width: u16) -> Self {
         Self {
             base,
-            width: width.clamp(1, 240),
+            width: width.clamp(1, MAX_WIDTH),
             image_height: 32,
             color: true,
             remote_images: false,
@@ -36,20 +38,91 @@ impl Options {
 }
 #[derive(Default)]
 pub struct Rendered {
+    pub width: usize,
     pub lines: Vec<Line<'static>>,
 }
 impl Rendered {
     pub fn plain(&self) -> String {
+        let mut result = String::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            if i > 0 {
+                result.push('\n');
+            }
+            for span in &line.spans {
+                result.push_str(&span.content);
+            }
+        }
+        result
+    }
+}
+/// Worker-side layout. UI frames only copy the visible viewport, never this entire output.
+pub(crate) struct Output {
+    lines: Vec<Line<'static>>,
+    pub(crate) width: usize,
+    limit: usize,
+    clipped: bool,
+}
+impl Output {
+    fn new(width: u16, limit: usize) -> Self {
+        Self {
+            lines: vec![],
+            width: usize::from(width).max(1),
+            limit,
+            clipped: false,
+        }
+    }
+    pub(crate) fn full(&self) -> bool {
+        self.lines.len() >= self.limit
+    }
+    pub(crate) fn remaining(&self) -> usize {
+        self.limit.saturating_sub(self.lines.len())
+    }
+    fn push(&mut self, line: Line<'static>) {
+        let (wrapped, clipped) = crate::preview_layout::wrap(line, self.width, self.remaining());
+        self.lines.extend(wrapped);
+        self.clipped |= clipped;
+    }
+    pub(crate) fn grid(&mut self, line: Line<'static>) {
+        if self.full() {
+            self.clipped = true;
+        } else {
+            self.lines.push(line);
+        }
+    }
+    fn extend(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+        for line in lines {
+            if self.full() {
+                self.clipped = true;
+                break;
+            }
+            self.push(line);
+        }
+    }
+    fn finish(mut self) -> Rendered {
+        if self.clipped {
+            self.lines.push(Line::raw(format!(
+                "[Preview line limit reached: {} lines]",
+                self.limit
+            )));
+        }
+        Rendered {
+            width: self.lines.iter().map(Line::width).max().unwrap_or(0),
+            lines: self.lines,
+        }
+    }
+}
+impl Rendered {
+    /// O(viewport size), including positions beyond u16::MAX.
+    pub fn viewport(&self, top: usize, left: usize, width: u16, height: u16) -> Vec<Line<'static>> {
         self.lines
             .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .skip(top)
+            .take(usize::from(height))
+            .map(|line| crate::preview_layout::clip(line, left, usize::from(width)))
+            .collect()
+    }
+    pub fn max_left(&self) -> usize {
+        self.width
     }
 }
 fn text(value: &str) -> String {
@@ -184,7 +257,16 @@ fn image_lines(destination: &str, alt: &str, opts: &Options) -> Result<Vec<Line<
     Ok(lines)
 }
 pub fn render(markdown: &str, opts: &Options) -> Rendered {
-    let mut lines = vec![];
+    render_limited(markdown, opts, MAX_MARKDOWN, MAX_LINES)
+}
+fn render_limited(
+    markdown: &str,
+    opts: &Options,
+    max_markdown: usize,
+    max_lines: usize,
+) -> Rendered {
+    let mut lines = Output::new(opts.width, max_lines);
+    let mut table: Option<crate::preview_table::Table> = None;
     let mut spans = vec![];
     let mut heading = false;
     let mut code: Option<(String, String)> = None;
@@ -192,16 +274,32 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
     let mut cache: HashMap<String, Vec<Line<'static>>> = HashMap::new();
     let mut image_count = 0usize;
     let mut list_depth = 0usize;
-    let mut end = markdown.len().min(MAX_MARKDOWN);
+    let mut end = markdown.len().min(max_markdown);
     while !markdown.is_char_boundary(end) {
         end -= 1;
     }
     for event in pulldown_cmark::Parser::new_ext(&markdown[..end], MdOptions::all()) {
-        if lines.len() >= MAX_LINES {
-            lines.push(Line::raw("[Preview line limit reached]"));
+        if lines.full() {
+            lines.clipped = true;
             break;
         }
+        if matches!(event, Event::End(TagEnd::Table)) {
+            if let Some(table) = table.take() {
+                table.render(&mut lines);
+            }
+            continue;
+        }
+        if let Some(table) = &mut table {
+            table.event(event);
+            continue;
+        }
         match event {
+            Event::Start(Tag::Table(alignments)) => {
+                if !spans.is_empty() {
+                    lines.push(Line::from(std::mem::take(&mut spans)));
+                }
+                table = Some(crate::preview_table::Table::new(alignments));
+            }
             Event::Start(Tag::CodeBlock(kind)) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
@@ -217,11 +315,9 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
             Event::End(TagEnd::CodeBlock) => {
                 if let Some((lang, source)) = code.take() {
                     if lang.trim().eq_ignore_ascii_case("mermaid") {
-                        lines.extend(
-                            crate::mermaid::render(&source, usize::from(opts.width))
-                                .into_iter()
-                                .map(|s| Line::styled(s, Style::default().fg(Color::Cyan))),
-                        );
+                        for line in crate::mermaid::render(&source, usize::from(opts.width)) {
+                            lines.grid(Line::styled(line, Style::default().fg(Color::Cyan)));
+                        }
                     } else {
                         lines.extend(
                             source
@@ -250,10 +346,12 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
             Event::End(TagEnd::Image) => {
                 if let Some((dest, alt)) = image.take() {
                     image_count += 1;
-                    let result = if let Some(hit) = cache.get(&dest) {
+                    let result = if image_count > MAX_IMAGES {
+                        vec![Line::raw(format!(
+                            "[Image limit: at most {MAX_IMAGES} per preview]"
+                        ))]
+                    } else if let Some(hit) = cache.get(&dest) {
                         hit.clone()
-                    } else if image_count > 16 {
-                        vec![Line::raw("[Image limit: at most 16 per preview]")]
                     } else {
                         let result = image_lines(&dest, &alt, opts).unwrap_or_else(|e| {
                             vec![Line::styled(
@@ -274,11 +372,6 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
                 "{}* ",
                 "  ".repeat(list_depth.saturating_sub(1).min(16))
             ))),
-            Event::Start(Tag::TableCell) => {
-                if !spans.is_empty() {
-                    spans.push(Span::raw(" | "));
-                }
-            }
             Event::Text(t) => spans.push(Span::styled(
                 text(&t),
                 if heading {
@@ -295,13 +388,7 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
             Event::SoftBreak | Event::HardBreak => {
                 lines.push(Line::from(std::mem::take(&mut spans)))
             }
-            Event::End(
-                TagEnd::Paragraph
-                | TagEnd::Heading(_)
-                | TagEnd::Item
-                | TagEnd::TableRow
-                | TagEnd::TableHead,
-            ) => {
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item) => {
                 if !spans.is_empty() {
                     lines.push(Line::from(std::mem::take(&mut spans)));
                 }
@@ -322,10 +409,12 @@ pub fn render(markdown: &str, opts: &Options) -> Rendered {
         lines.push(Line::from(spans));
     }
     if end < markdown.len() {
-        lines.push(Line::raw("[Markdown truncated at 1 MiB]"));
+        lines.grid(Line::raw(format!(
+            "[Markdown truncated at {} MiB]",
+            MAX_MARKDOWN / 1024 / 1024
+        )));
     }
-    lines.truncate(MAX_LINES + 1);
-    Rendered { lines }
+    lines.finish()
 }
 pub fn read_markdown(path: &Path) -> Result<String> {
     let mut data = if path == Path::new("-") {
@@ -370,6 +459,10 @@ mod tests {
         let r = render(md, &opts);
         assert!(!r.plain().contains('▀'));
         assert!(r.plain().contains('@') || r.plain().contains(':'));
+        opts.width = 80;
+        let repeated = render(&"![sample](a%20b.png)\n\n".repeat(MAX_IMAGES + 1), &opts).plain();
+        assert_eq!(repeated.matches("[Image: sample").count(), MAX_IMAGES);
+        assert!(repeated.contains("at most 256"));
         Ok(())
     }
     #[test]
@@ -414,6 +507,135 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn large_input_and_viewport_pass_former_byte_and_u16_limits() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut source = String::from("```text\n");
+        for i in 0..70_100 {
+            source.push_str(&format!(
+                "row {i:06} 日本語 content beyond previous byte and line limits\n"
+            ));
+        }
+        source.push_str("TAIL_COMPLETE\n```\n");
+        assert!(source.len() > 1024 * 1024);
+        let path = dir.path().join("large.md");
+        std::fs::write(&path, &source)?;
+        let source = read_markdown(&path)?;
+        let rendered = render(&source, &Options::new(dir.path().to_owned(), 120));
+        assert_eq!(rendered.lines.len(), 70_101);
+        let page = rendered.viewport(70_095, 0, 120, 10);
+        assert_eq!(page.len(), 6);
+        assert!(page[0].to_string().contains("row 070095"));
+        assert!(page.last().unwrap().to_string().contains("TAIL_COMPLETE"));
+        assert!(!rendered.lines.last().unwrap().to_string().contains("limit"));
+        Ok(())
+    }
+    #[test]
+    fn tables_align_numbers_style_headers_and_keep_rectangular_cells() {
+        let md = "| 名称 | 数量 | 金額 | 状態 |\n| :--- | --- | ---: | :---: |\n| **顧客** | 1,234 | 12.50 | [Ready](https://example.com) |\n| `records.dat` | 42 | -9 | A<br>B |\n| 空欄 | | | |\n";
+        let rendered = render(md, &Options::new(PathBuf::from("."), 80));
+        let text = rendered.plain();
+        for needle in [
+            "┌",
+            "╞",
+            "└",
+            "名称",
+            "│ 1 │",
+            "│ 2 │",
+            "│ 3 │",
+            "1,234",
+            "12.50",
+            "records.dat",
+        ] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        let widths = rendered.lines.iter().map(Line::width).collect::<Vec<_>>();
+        assert!(widths.iter().all(|w| *w == widths[0]), "{text}");
+        assert!(widths[0] <= 80);
+        let row = rendered
+            .lines
+            .iter()
+            .find(|line| line.to_string().contains("1,234"))
+            .unwrap()
+            .to_string();
+        let cells = row.split('│').collect::<Vec<_>>();
+        assert!(cells[3].ends_with("1,234 "), "{row}");
+        assert!(cells[4].ends_with("12.50 "), "{row}");
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content == "顧客"
+                    && span.style.add_modifier.contains(Modifier::BOLD))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content == "Ready"
+                    && span.style.add_modifier.contains(Modifier::UNDERLINED))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content == "records.dat" && span.style.fg == Some(Color::Yellow))
+        );
+    }
+    #[test]
+    fn narrow_and_wide_tables_preserve_text_and_bound_output() {
+        let md = "|項目|説明|\n|---|---|\n|日本語|alpha beta gamma delta<br>次の行|\n";
+        let rendered = render(md, &Options::new(PathBuf::from("."), 26));
+        let text = rendered.plain();
+        for needle in ["alpha", "beta", "gamma", "delta", "日本語", "次の行"] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| line.width() == rendered.width)
+        );
+        let header = (0..28)
+            .map(|i| format!("H{i}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let separator = vec!["---"; 28].join("|");
+        let wide = render(
+            &format!("|{header}|\n|{separator}|\n"),
+            &Options::new(PathBuf::from("."), 20),
+        );
+        assert!(wide.width > 20);
+        assert!(wide.plain().contains("AA"));
+        assert!(
+            wide.viewport(1, wide.width - 20, 20, 1)[0]
+                .to_string()
+                .contains("AB")
+        );
+        for source in [
+            "```text\n".to_owned() + &"long line of text\n".repeat(1000) + "```",
+            md.repeat(100),
+        ] {
+            let bounded = render_limited(
+                &source,
+                &Options::new(PathBuf::from("."), 10),
+                MAX_MARKDOWN,
+                50,
+            );
+            assert_eq!(bounded.lines.len(), 51);
+            assert!(
+                bounded
+                    .lines
+                    .last()
+                    .unwrap()
+                    .to_string()
+                    .contains("line limit")
+            );
+        }
+    }
+    #[test]
     fn controls_limits_and_unclosed_fences_are_safe() {
         let opts = Options::new(PathBuf::from("."), 80);
         assert!(!render("bad\u{1b}[2J", &opts).plain().contains('\u{1b}'));
@@ -422,7 +644,8 @@ mod tests {
                 .plain()
                 .contains("unsupported")
         );
-        let s = "x".repeat(MAX_MARKDOWN + 10);
-        assert!(render(&s, &opts).plain().contains("truncated"));
+        let rendered = render_limited("日本語日本語", &opts, 8, 100).plain();
+        assert!(rendered.contains("truncated"));
+        assert!(!rendered.contains('�'));
     }
 }

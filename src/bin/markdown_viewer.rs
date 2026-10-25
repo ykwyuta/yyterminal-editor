@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
-    widgets::{Paragraph, Wrap},
+    widgets::Paragraph,
 };
 use std::{
     io::{IsTerminal, Write},
@@ -12,15 +12,32 @@ use std::{
 use yyterminal_editor::preview::{self, Options, Rendered};
 fn print(rendered: &Rendered, color: bool) -> Result<()> {
     let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = std::io::BufWriter::new(stdout.lock());
     if !color {
-        writeln!(out, "{}", rendered.plain())?;
+        for line in &rendered.lines {
+            for span in &line.spans {
+                write!(out, "{}", span.content)?;
+            }
+            writeln!(out)?;
+        }
+        out.flush()?;
         return Ok(());
     }
     for line in &rendered.lines {
         for span in &line.spans {
             write!(out, "\x1b[0m")?;
-            for (prefix, c) in [(38, span.style.fg), (48, span.style.bg)] {
+            let style = line.style.patch(span.style);
+            for (modifier, code) in [
+                (ratatui::style::Modifier::BOLD, 1),
+                (ratatui::style::Modifier::ITALIC, 3),
+                (ratatui::style::Modifier::UNDERLINED, 4),
+                (ratatui::style::Modifier::CROSSED_OUT, 9),
+            ] {
+                if style.add_modifier.contains(modifier) {
+                    write!(out, "\x1b[{code}m")?;
+                }
+            }
+            for (prefix, c) in [(38, style.fg), (48, style.bg)] {
                 if let Some(c) = c {
                     use ratatui::style::Color;
                     match c {
@@ -36,9 +53,11 @@ fn print(rendered: &Rendered, color: bool) -> Result<()> {
         }
         writeln!(out, "\x1b[0m")?;
     }
+    out.flush()?;
     Ok(())
 }
 fn interactive(source: String, mut opts: Options) -> Result<()> {
+    let source: std::sync::Arc<str> = source.into();
     let mut terminal = ratatui::try_init()?;
     struct Restore;
     impl Drop for Restore {
@@ -53,13 +72,13 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     let mut rendered = Rendered::default();
     let mut pending = false;
     let mut last_width = 0;
-    let mut scroll = 0u16;
-    let mut left = 0u16;
+    let mut scroll = 0usize;
+    let mut left = 0usize;
     let mut error = String::new();
     let mut dirty = true;
     let mut mouse_actions = vec![];
     loop {
-        let width = terminal.size()?.width.clamp(1, 240);
+        let width = terminal.size()?.width.clamp(1, preview::MAX_WIDTH);
         if width != last_width && !pending {
             opts.width = width;
             last_width = width;
@@ -85,6 +104,13 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
                     Constraint::Length(1),
                 ])
                 .areas(f.area());
+                scroll = scroll.min(
+                    rendered
+                        .lines
+                        .len()
+                        .saturating_sub(usize::from(body.height)),
+                );
+                left = left.min(rendered.max_left().saturating_sub(usize::from(body.width)));
                 mouse_actions.clear();
                 let mut x = controls.x;
                 for (label, key) in [
@@ -105,9 +131,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
                     }
                 }
                 f.render_widget(
-                    Paragraph::new(rendered.lines.clone())
-                        .wrap(Wrap { trim: false })
-                        .scroll((scroll, left)),
+                    Paragraph::new(rendered.viewport(scroll, left, body.width, body.height)),
                     body,
                 );
                 f.render_widget(
@@ -160,17 +184,24 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
                     KeyCode::Up => scroll = scroll.saturating_sub(1),
                     KeyCode::Down => scroll = scroll.saturating_add(1),
                     KeyCode::PageUp => {
-                        scroll = scroll.saturating_sub(terminal.size()?.height.saturating_sub(2))
+                        scroll = scroll
+                            .saturating_sub(usize::from(terminal.size()?.height.saturating_sub(2)))
                     }
                     KeyCode::PageDown | KeyCode::Char(' ') => {
-                        scroll = scroll.saturating_add(terminal.size()?.height.saturating_sub(2))
+                        scroll = scroll
+                            .saturating_add(usize::from(terminal.size()?.height.saturating_sub(2)))
                     }
                     KeyCode::Left => left = left.saturating_sub(4),
                     KeyCode::Right => left = left.saturating_add(4),
-                    KeyCode::Home => scroll = 0,
+                    KeyCode::Home => {
+                        scroll = 0;
+                        left = 0;
+                    }
                     KeyCode::End => {
-                        scroll = (rendered.lines.len() as u16)
-                            .saturating_sub(terminal.size()?.height.saturating_sub(1))
+                        scroll = rendered
+                            .lines
+                            .len()
+                            .saturating_sub(usize::from(terminal.size()?.height.saturating_sub(2)))
                     }
                     _ => {}
                 },
@@ -194,7 +225,7 @@ fn main() -> Result<()> {
         match arg.to_str() {
             Some("--help" | "-h") => {
                 println!(
-                    "markdownViewer [OPTIONS] FILE.md|-\n\nTerminal Markdown viewer with pixel images and Mermaid ASCII diagrams.\nTTY: interactive; q/Esc quit, arrows/PgUp/PgDn/Home/End scroll.\nRedirected output: plain text. Markdown input: UTF-8, at most 1 MiB.\n\n--plain          Print plain text with ASCII image raster\n--print          Print without entering interactive viewer\n--color          Use truecolor half-block images, including redirected output\n--width N        Output width (1..240, default 80)\n--image-height N Maximum image height (1..120 terminal rows, default 32)\n--base-dir DIR   Resolve relative images here (default: Markdown directory)\n--remote-images  Permit HTTP/HTTPS image downloads (5s timeout, 20 MiB each)\n--version        Show version\n\nSupported diagrams, resource limits and image formats: docs/user/help.md"
+                    "markdownViewer [OPTIONS] FILE.md|-\n\nTerminal Markdown viewer with pixel images and Mermaid ASCII diagrams.\nTTY: interactive; q/Esc quit, arrows/PgUp/PgDn/Home/End scroll.\nRedirected output: plain text. Markdown input: UTF-8, at most 128 MiB.\n\n--plain          Print plain text with ASCII image raster\n--print          Print without entering interactive viewer\n--color          Use truecolor half-block images, including redirected output\n--width N        Output width (1..4096, default 80)\n--image-height N Maximum image height (1..120 terminal rows, default 32)\n--base-dir DIR   Resolve relative images here (default: Markdown directory)\n--remote-images  Permit HTTP/HTTPS image downloads (5s timeout, 20 MiB each)\n--version        Show version\n\nSupported diagrams, resource limits and image formats: docs/user/help.md"
                 );
                 return Ok(());
             }
@@ -215,7 +246,7 @@ fn main() -> Result<()> {
                     .context("--width needs a number")?
                     .to_string_lossy()
                     .parse()?;
-                ensure!((1..=240).contains(&width), "width: 1..240");
+                ensure!((1..=preview::MAX_WIDTH).contains(&width), "width: 1..4096");
             }
             Some("--image-height") => {
                 height = args

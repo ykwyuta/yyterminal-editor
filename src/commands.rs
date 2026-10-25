@@ -61,4 +61,252 @@ pub const COMMANDS: &[&str] = &[
     "Preview remote images",
     "Help",
     "Quit",
+    "Folder tree",
+    "Folder navigation",
+    "Refresh explorer",
+    "Language: English",
+    "Language: Japanese",
 ];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Language {
+    #[default]
+    English,
+    Japanese,
+}
+pub struct Menu {
+    pub name: &'static str,
+    pub japanese: &'static str,
+    pub commands: &'static [&'static str],
+}
+pub const MENUS: &[Menu] = &[
+    Menu {
+        name: "File",
+        japanese: "ファイル",
+        commands: &[
+            "New file",
+            "New workbook",
+            "Open file",
+            "Open encoding",
+            "Workspace folders",
+            "Save",
+            "Save as",
+            "Export CSV",
+            "Export fixed-length",
+            "Close tab",
+            "Quit",
+        ],
+    },
+    Menu {
+        name: "Edit",
+        japanese: "編集",
+        commands: &[
+            "Undo",
+            "Redo",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Select all",
+            "Copy to system clipboard",
+            "Edit cell",
+        ],
+    },
+    Menu {
+        name: "Search",
+        japanese: "検索",
+        commands: &["Find text", "Compare file (yymerge)"],
+    },
+    Menu {
+        name: "View",
+        japanese: "表示",
+        commands: &[
+            "Explorer",
+            "Folder tree",
+            "Folder navigation",
+            "Refresh explorer",
+            "Next tab",
+            "Markdown preview",
+            "Split Markdown preview",
+            "Preview remote images",
+        ],
+    },
+    Menu {
+        name: "Insert/Delete",
+        japanese: "挿入・削除",
+        commands: &[
+            "Insert rows",
+            "Delete rows",
+            "Insert columns",
+            "Delete columns",
+            "Append record",
+            "Delete record",
+            "Add sheet",
+        ],
+    },
+    Menu {
+        name: "Format",
+        japanese: "書式",
+        commands: &["Column width", "Row height", "Bold", "Number format"],
+    },
+    Menu {
+        name: "Data",
+        japanese: "データ",
+        commands: &[
+            "Spreadsheet mode",
+            "CSV table",
+            "TSV table",
+            "Delimited table",
+            "Fixed-length table",
+            "Apply layout (.yyl)",
+            "Save layout (.yyl)",
+            "Infer fixed layout",
+            "Row layout",
+            "Move column",
+            "Sort ascending",
+            "Sort descending",
+            "Filter column",
+            "Clear sort/filter",
+            "Autofill down",
+            "Next sheet",
+        ],
+    },
+    Menu {
+        name: "Tools",
+        japanese: "ツール",
+        commands: &[
+            "Terminal",
+            "New terminal",
+            "Git status",
+            "Git diff",
+            "Git staged diff",
+            "Git stage all",
+            "Git unstage all",
+            "Git commit",
+        ],
+    },
+    Menu {
+        name: "Settings",
+        japanese: "設定",
+        commands: &["Language: English", "Language: Japanese"],
+    },
+    Menu {
+        name: "Help",
+        japanese: "ヘルプ",
+        commands: &["Help"],
+    },
+];
+pub const OPEN_MODES: &[&str] = &[
+    "Open as text",
+    "Open as CSV",
+    "Open as TSV",
+    "Open as delimited",
+    "Open as fixed-length",
+];
+pub fn label(command: &str, language: Language) -> &str {
+    if language == Language::English {
+        return command;
+    }
+    match command {
+        "Open file" => "ファイルを開く",
+        "Open encoding" => "文字コードを指定",
+        "Workspace folders" => "ワークスペースのフォルダー",
+        "Save" => "保存",
+        "Save as" => "名前を付けて保存",
+        "New file" => "新規ファイル",
+        "Next tab" => "次のタブ",
+        "Close tab" => "タブを閉じる",
+        "Find text" => "文字列を検索",
+        "Copy" => "コピー",
+        "Cut" => "切り取り",
+        "Paste" => "貼り付け",
+        "Undo" => "元に戻す",
+        "Redo" => "やり直す",
+        "Select all" => "すべて選択",
+        "Spreadsheet mode" => "表計算モード",
+        "New workbook" => "新規ブック",
+        "Insert rows" => "行を挿入",
+        "Delete rows" => "行を削除",
+        "Insert columns" => "列を挿入",
+        "Delete columns" => "列を削除",
+        "Move column" => "列を移動",
+        "Sort ascending" => "昇順で並べ替え",
+        "Sort descending" => "降順で並べ替え",
+        "Filter column" => "列で絞り込み",
+        "Clear sort/filter" => "並べ替えと絞り込みを解除",
+        "Autofill down" => "下方向に連続入力",
+        "Column width" => "列幅",
+        "Row height" => "行の高さ",
+        "Export fixed-length" => "固定長ファイルに書き出す",
+        "Compare file (yymerge)" => "ファイルを比較（yymerge）",
+        "Bold" => "太字",
+        "Number format" => "数値の表示形式",
+        "Next sheet" => "次のシート",
+        "Add sheet" => "シートを追加",
+        "Row layout" => "行のレイアウト",
+        "Export CSV" => "CSVに書き出す",
+        "Copy to system clipboard" => "システムクリップボードにコピー",
+        "CSV table" => "CSVモード",
+        "TSV table" => "TSVモード",
+        "Delimited table" => "任意区切りモード",
+        "Fixed-length table" => "固定長モード",
+        "Apply layout (.yyl)" => "レイアウトを適用（.yyl）",
+        "Save layout (.yyl)" => "レイアウトを保存（.yyl）",
+        "Infer fixed layout" => "固定長レイアウトを推定",
+        "Edit cell" => "セルを編集",
+        "Append record" => "レコードを追加",
+        "Delete record" => "レコードを削除",
+        "Explorer" => "エクスプローラー",
+        "Terminal" => "ターミナル",
+        "New terminal" => "新規ターミナル",
+        "Git status" => "Gitの状態",
+        "Git diff" => "Gitの差分",
+        "Git staged diff" => "Gitのステージ済み差分",
+        "Git stage all" => "Gitですべてステージ",
+        "Git unstage all" => "Gitのステージを解除",
+        "Git commit" => "Gitにコミット",
+        "Markdown preview" => "Markdownプレビュー",
+        "Split Markdown preview" => "Markdownを並べてプレビュー",
+        "Preview remote images" => "プレビューのリモート画像",
+        "Help" => "ヘルプ",
+        "Quit" => "終了",
+        "Folder tree" => "フォルダーをツリーで表示",
+        "Folder navigation" => "フォルダーを移動して表示",
+        "Refresh explorer" => "フォルダー一覧を更新",
+        "Language: English" => "English（英語）",
+        "Language: Japanese" => "日本語（Japanese）",
+        "Open as text" => "テキストとして開く",
+        "Open as CSV" => "CSVとして開く",
+        "Open as TSV" => "TSVとして開く",
+        "Open as delimited" => "区切り文字を指定して開く",
+        "Open as fixed-length" => "固定長として開く",
+        _ => command,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn menus_cover_commands_and_both_languages() {
+        for command in COMMANDS {
+            assert!(
+                MENUS.iter().any(|menu| menu.commands.contains(command))
+                    || OPEN_MODES.contains(command),
+                "Unclassified: {command}"
+            );
+            assert_ne!(
+                label(command, Language::Japanese),
+                *command,
+                "Missing Japanese label: {command}"
+            );
+        }
+        for command in OPEN_MODES {
+            assert_ne!(label(command, Language::Japanese), *command);
+        }
+        for menu in MENUS {
+            for command in menu.commands {
+                assert!(COMMANDS.contains(command));
+            }
+        }
+    }
+}

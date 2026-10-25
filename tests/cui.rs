@@ -23,6 +23,7 @@ fn interactive_editor_save_preview_shell_resize_and_exit() -> Result<()> {
     command.cwd(dir.path());
     command.env("TERM", "xterm-256color");
     command.env("SHELL", "/bin/sh");
+    command.env("YYTE_CONFIG_DIR", dir.path().join(".yyte-test-config"));
     let mut child = pair.slave.spawn_command(command)?;
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader()?;
@@ -162,6 +163,10 @@ impl Harness {
         command.cwd(path.parent().unwrap());
         command.env("TERM", "xterm-256color");
         command.env("SHELL", "/bin/sh");
+        command.env(
+            "YYTE_CONFIG_DIR",
+            path.parent().unwrap().join(".yyte-test-config"),
+        );
         let child = pair.slave.spawn_command(command)?;
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader()?;
@@ -216,13 +221,16 @@ impl Harness {
         self.wait_for(text, |screen| screen.screen_text().contains(text))
     }
     fn click_text(&mut self, label: &str) -> Result<()> {
+        self.click_button(label, 0)
+    }
+    fn click_button(&mut self, label: &str, button: u8) -> Result<()> {
         for row in 0..self.screen.rows() {
             let text = self.screen.screen_row(row).text();
             if let Some(at) = text.find(label) {
                 let col = unicode_width::UnicodeWidthStr::width(&text[..at]);
                 self.send(
                     format!(
-                        "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+                        "\x1b[<{button};{};{}M\x1b[<{button};{};{}m",
                         col + 1,
                         row + 1,
                         col + 1,
@@ -575,12 +583,12 @@ fn interactive_mouse_menu_folder_and_file_navigation() -> Result<()> {
     std::fs::write(child.join("mouse-note.txt"), b"opened by mouse\n")?;
     let mut app = Harness::new(&path)?;
     app.wait("Opened")?;
-    app.click_text("Menu")?;
-    app.wait("Commands: arrows")?;
+    app.click_text("File")?;
+    app.wait("New file")?;
     app.click_text("New file")?;
     app.wait_for("new file selected", |s| {
         let t = s.screen_text();
-        t.contains("[Untitled]") && !t.contains("Commands: arrows")
+        t.contains("[Untitled]") && !t.contains("Save as")
     })?;
     app.click_text("mouse-folder")?;
     app.wait("mouse-note.txt")?;
@@ -598,7 +606,7 @@ fn mouse_terminal_tabs_and_live_split_preview() -> Result<()> {
     std::fs::write(&path, "# Sample\n\nsource paragraph\n")?;
     let mut app = Harness::new(&path)?;
     app.wait("Opened")?;
-    app.click_text("+Terminal")?;
+    app.command("New terminal")?;
     app.wait("Terminal 2")?;
     app.send(b"printf '\\102\\101\\103\\113\\107\\122\\117\\125\\116\\104\\n'\r")?;
     app.click_text("[note.md]")?;
@@ -616,7 +624,7 @@ fn mouse_terminal_tabs_and_live_split_preview() -> Result<()> {
     app.wait_for("terminal tab closed", |s| {
         !s.screen_text().contains("Terminal 2") && s.screen_text().contains("# Sample")
     })?;
-    app.click_text("Split")?;
+    app.command("Split Markdown preview")?;
     app.wait_for("split preview ready", |s| {
         let t = s.screen_text();
         t.matches("Sample").count() >= 2 && !t.contains("Rendering Markdown")
@@ -660,7 +668,12 @@ fn mouse_confirms_save_as_and_viewer_buttons_work() -> Result<()> {
         "Saved bytes changed"
     );
     app.finish()?;
-    let mut viewer = Harness::with_exe(&path, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    let viewer_path = dir.path().join("viewer.md");
+    std::fs::write(
+        &viewer_path,
+        "# Original\n\n".to_owned() + &"scrollable content\n".repeat(80),
+    )?;
+    let mut viewer = Harness::with_exe(&viewer_path, env!("CARGO_BIN_EXE_markdownViewer"))?;
     viewer.wait("Ready")?;
     viewer.click_text("[Down]")?;
     viewer.wait_for("mouse scrolled viewer", |s| {
@@ -676,6 +689,114 @@ fn mouse_confirms_save_as_and_viewer_buttons_work() -> Result<()> {
             break;
         }
         ensure!(Instant::now() < deadline, "Viewer did not close");
+        if let Ok(bytes) = viewer
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            viewer.screen.feed(&bytes);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn categorized_menus_tree_wrapping_open_modes_and_language_persist() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("start.txt");
+    std::fs::write(&path, b"original document\n")?;
+    let folder = dir.path().join("folder");
+    std::fs::create_dir(&folder)?;
+    // The final line is deliberately a distinct clickable continuation.
+    let filename = format!("{}target.csv", "x".repeat(44));
+    std::fs::write(folder.join(&filename), b"id,name\n1,Alice\n")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.click_text("View")?;
+    app.wait("Folder tree")?;
+    app.click_text("Folder tree")?;
+    app.wait("Explorer / Tree")?;
+    app.click_text("folder")?;
+    app.wait("target.csv")?;
+    ensure!(
+        app.screen.screen_text().contains("start.txt"),
+        "Root sibling disappeared: {}",
+        app.screen.screen_text()
+    );
+    app.click_button("target.csv", 2)?;
+    app.wait("Open as CSV")?;
+    app.click_text("Open as CSV")?;
+    app.wait("Alice")?;
+    app.click_text("Settings")?;
+    app.wait("Language: Japanese")?;
+    app.click_text("Language: Japanese")?;
+    app.wait("ファイル")?;
+    app.click_text("設定")?;
+    app.wait("English（英語）")?;
+    app.send(b"\x1b")?;
+    app.wait_for("Japanese settings menu closed", |s| {
+        !s.screen_text().contains("English（英語）")
+    })?;
+    app.finish()?;
+    let settings = dir.path().join(".yyte-test-config/ui.conf");
+    let text = std::fs::read_to_string(&settings)?;
+    ensure!(
+        text.contains("language=ja") && text.contains("explorer=tree"),
+        "Preferences not saved: {text}"
+    );
+    let mut reopened = Harness::new(&path)?;
+    reopened.wait("ファイル")?;
+    reopened.click_text("設定")?;
+    reopened.wait("English（英語）")?;
+    reopened.click_text("English（英語）")?;
+    reopened.wait("Settings")?;
+    reopened.finish()
+}
+
+#[test]
+fn large_preview_end_navigation_and_spreadsheet_table_render_in_both_apps() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("large-preview.md");
+    let source = "```text\n".to_owned()
+        + &"document content past old byte and line limits\n".repeat(70_000)
+        + "```\n\n| Item | Quantity |\n|---|---:|\n| FINAL_TABLE | 123456 |\n";
+    std::fs::write(&path, source)?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.send(b"\x1b[15~")?;
+    app.wait("Markdown preview ready")?;
+    app.send(b"\x1b[F")?;
+    app.wait("FINAL_TABLE")?;
+    ensure!(
+        app.screen.screen_text().contains("123456") && app.screen.screen_text().contains('╞'),
+        "Grid missing: {}",
+        app.screen.screen_text()
+    );
+    app.finish()?;
+    let mut viewer = Harness::with_exe(&path, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    viewer.wait("Ready")?;
+    viewer.click_text("[End]")?;
+    viewer.wait("FINAL_TABLE")?;
+    ensure!(
+        viewer.screen.screen_text().contains("123456") && viewer.screen.screen_text().contains('╞'),
+        "Standalone grid missing: {}",
+        viewer.screen.screen_text()
+    );
+    viewer.click_text("[Top]")?;
+    viewer.wait("document content past")?;
+    viewer.click_text("[Close]")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = viewer.child.try_wait()? {
+            ensure!(status.success(), "Viewer exit failed");
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Viewer did not exit: {}",
+            viewer.screen.screen_text()
+        );
         if let Ok(bytes) = viewer
             .rx
             .as_ref()

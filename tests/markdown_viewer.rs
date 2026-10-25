@@ -63,3 +63,26 @@ fn invalid_options_and_missing_input_fail_without_a_terminal() -> Result<()> {
     assert!(Command::new(exe).arg("--help").output()?.status.success());
     Ok(())
 }
+
+#[test]
+fn standalone_large_markdown_prints_table_after_former_limits() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("large.md");
+    let source = "ordinary content beyond former preview limits\n".repeat(70_000)
+        + "\n| Item | Quantity |\n|---|---:|\n| FINAL_ROW | 123456 |\n";
+    std::fs::write(&path, source)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_markdownViewer"))
+        .args(["--plain", "--width", "320"])
+        .arg(path)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout)?;
+    assert!(text.contains("FINAL_ROW") && text.contains("123456") && text.contains('╞'));
+    assert!(text.lines().count() > 65_535);
+    assert!(!text.contains("limit reached") && !text.contains("truncated"));
+    Ok(())
+}

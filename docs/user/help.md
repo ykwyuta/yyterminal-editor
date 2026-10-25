@@ -1,6 +1,7 @@
 yyterminal-editor / yyte — Initial developer preview
 
-F1 / F10     Command menu (arrows, Enter; Esc closes)
+F1           All commands (arrows, Enter; Esc closes)
+F10          File menu (Left/Right switch menu groups)
 F2           Editor
 F3           Git status
 F4           Integrated shell
@@ -29,7 +30,7 @@ Shell tabs: input is sent to a real PTY. F1–F7, F10 and Ctrl+Q are reserved
 for the application. F2 returns to editing. Bracketed paste is supported.
 Shift+PageUp/PageDown scroll through 2,000 lines of shell history.
 Typing returns to the live screen. Terminal starts or selects a shell tab;
-New terminal / +Terminal creates another. Background tabs keep their output.
+Tools > New terminal creates another. Background tabs keep their output.
 Closing a terminal tab stops its app-owned shell; exiting stops all shells.
 Ctrl+Tab and Ctrl+W also switch/close terminal tabs.
 
@@ -56,7 +57,7 @@ saving important data.
 Initial limitations: no remote SSH editing yet. Mouse cell selection and
 .yys workbook editing are available; unsupported YY binary formats remain blocked.
 Workspace loading is supported; creating/saving workspaces is not yet.
-Markdown preview is limited to the first 1 MiB; images become pixel art and
+Markdown preview supports the first 128 MiB; images become pixel art and
 Mermaid becomes ASCII diagrams. HTML/JavaScript are not executed. Git output is
 currently captured in memory. Giant repository diffs are not optimized.
 
@@ -241,14 +242,14 @@ q/Esc or Ctrl+C exits. Redirected output defaults to plain text with ASCII
 image shading. --plain explicitly selects this mode. --color enables
 truecolor half-blocks for printed output. --print avoids the interactive UI.
 --base-dir DIR overrides relative image paths; --image-height N sets 1..120
-terminal lines. Input is UTF-8, at most 1 MiB (BOM supported).
+terminal lines. Input is UTF-8, at most 128 MiB (BOM supported).
 
 HTTP/HTTPS images require explicit opt-in: command Preview remote images in
 yyte, or --remote-images in markdownViewer. Otherwise a placeholder explains
 why the image is blocked. Downloads use TLS validation, a 5-second timeout,
 at most 3 redirects and 20 MiB per resource. Local/data:base64 images have
 the same 20 MiB cap; decoded images are limited to 8192x8192 and 64 MiB.
-At most 16 image references and 20,000 output lines are rendered per preview.
+At most 256 image references and 1,000,000 output lines are rendered per preview.
 Do not enable remote images if the document's URLs should not be contacted.
 
 See docs/user/markdown-viewer.md and demo/markdown-preview.md for examples,
@@ -257,15 +258,16 @@ syntax coverage and the native renderer's differences from browser Mermaid.
 
 Mouse menu and explorer navigation
 ----------------------------------
-Click Menu in the top bar to open commands; click a command to run it.
+Click a category in the top bar (File, Edit, Search, View, Insert/Delete,
+Format, Data, Tools, Settings, Help), then click a command to run it.
 Move over a menu item to highlight it, and use the wheel to reach commands
 below the visible area. Clicking outside the menu closes it without
 activating the item underneath. Esc still closes the menu.
 
-Click a folder once in Explorer to enter it; click [..] to go to its parent.
+In navigation mode, click a folder once to enter it; click [..] for its parent.
 Click a file once to open it in an editor tab. Wheel over Explorer moves
-through the list without opening entries. On narrow screens, click Files
-(or choose Explorer in the command menu) to show the file list.
+through the list without opening entries. On narrow screens, choose
+View > Explorer to show the file list.
 The other top-bar labels also respond to clicks. Right-click within the
 main content opens the command menu. Existing grid drag selection remains
 available. The terminal must forward mouse events (application mouse mode);
@@ -274,16 +276,15 @@ terminal-native selection typically requires holding Shift.
 
 Mouse-first editing, tabs and split preview
 ------------------------------------------
-The top bar uses names rather than function-key labels: Menu, Edit, Git,
-Terminal, +Terminal, Preview, Split, Files, Table. Function keys remain
-optional shortcuts. The tab strip below it contains documents and terminal
+The top bar groups operations by purpose, following yyeditor and yysheet.
+Function keys remain optional shortcuts. The tab strip below it contains documents and terminal
 tabs together. Click a tab to activate it, x to close it, and [<]/[>] to
 reach tabs outside the visible strip. Unsaved document tabs require saving
 before closing. Terminal tab closure terminates its shell, not just its view.
 
 Click in the text editor to place the caret; drag to select text. Positions
 respect Japanese/wide characters, combining graphemes and expanded tabs.
-Copy/Cut/Paste/Undo/Redo/Select all are also available in Menu. Copy/Paste
+Copy/Cut/Paste/Undo/Redo/Select all are also available in Edit. Copy/Paste
 uses the internal clipboard; Copy to system clipboard remains a separate
 OSC 52 operation. In a terminal tab, Copy copies the visible screen and
 Paste sends the internal clipboard; document Undo/Cut are not terminal actions.
@@ -302,10 +303,11 @@ preview during dragging; release commits a single workbook undo operation.
 Workbook dimensions persist in .yys, while raw CSV/fixed-grid dimensions are
 session-only. Menu width/height commands remain available for exact values.
 
-Click Split (or Split Markdown preview in Menu) while a Markdown document
+Choose View > Split Markdown preview while a Markdown document
 is active to show its editor and preview together. The preview follows the
 unsaved document and has independent wheel scrolling. Click either pane to
-focus it. Split again or the preview's [x] closes the side pane; Preview/F5
+focus it. Choose that command again or the preview's [x] to close the side
+pane; View > Markdown preview / F5
 still offers the full preview. Narrow screens stack the panes vertically;
 very small screens show the editor until there is space for both.
 
@@ -313,3 +315,105 @@ Standalone markdownViewer also captures mouse input. Wheel scrolls, and
 [Close], [Up], [Down], [Top], [End], [<], [>] provide clickable navigation.
 Terminal-native text selection generally uses Shift while mouse capture is
 active. Terminal emulators must forward mouse events to support these actions.
+
+
+Categorized menus / メニューの分類
+----------------------------------
+File / ファイル: new/open, encoding for the next open, workspace folders,
+  save/save as, exports, close tab, quit.
+Edit / 編集: undo/redo, cut/copy/paste, selection and cell editing.
+Search / 検索: find text and yymerge comparison.
+View / 表示: explorer, folder display mode, refresh, tabs and previews.
+Insert/Delete / 挿入・削除: rows, columns, records and sheets.
+Format / 書式: column width, row height, bold and number format.
+Data / データ: CSV/TSV/delimited/fixed-length/spreadsheet modes, layouts,
+  sort, filter, column movement and autofill.
+Tools / ツール: terminal tabs and Git operations.
+Settings / 設定: menu language. Help / ヘルプ: this help.
+
+Click categories to open them; hover over another category to switch.
+Left/Right switches groups, Up/Down selects, Enter applies, Esc cancels.
+F10 opens File; F1 retains the complete command palette. When the terminal
+is narrow, category names wrap onto additional header rows.
+
+Folder tree / フォルダーのツリー表示
+------------------------------------
+View > Folder tree / 表示 > フォルダーをツリーで表示 switches Explorer to a tree.
+Click [+] or the directory name to expand it in place; [-] collapses its
+entire subtree. Parent and sibling entries remain visible. Expansion does
+not change the current directory used for relative paths, Git and terminals.
+Enter toggles a directory; Right expands or selects its first child; Left
+selects the parent or collapses the selected expanded directory.
+View > Folder navigation restores the original enter-folder / [..] mode.
+View > Refresh explorer reloads the current root and collapses expanded folders.
+A folder may show up to 10,000 entries; the expanded tree is limited to
+20,000 entries. Child folders load only when explicitly expanded, on a worker.
+
+Long names wrap automatically within Explorer, including Japanese names.
+All continuation rows belong to the same entry and support left/right click.
+Resizing reflows the name; the actual path and file name are unchanged.
+
+Open mode from Explorer / 開くモードの選択
+------------------------------------------
+Right-click a file (including a wrapped continuation) and choose:
+- Open as text / テキストとして開く
+- Open as CSV / CSVとして開く
+- Open as TSV / TSVとして開く
+- Open as delimited / 区切り文字を指定して開く (asks for delimiter)
+- Open as fixed-length / 固定長として開く (asks for layout and record settings)
+
+Fixed-length input: COPYBOOK_OR_YYL;RECORD_BYTES;CHARSET;SEPARATOR
+Example: record.cpy;80;MS932;none
+A .yyl layout can replace the copybook. Separators: none, crlf, lf, nl.
+The selected file opens directly as raw fixed-length data, preserving packed
+fields and padding without first decoding it as text. Cancel leaves the file
+closed. Other unsaved document tabs are retained. Normal left-click retains
+the existing automatic open behavior, including .yys workbook support.
+
+Menu language / メニューの表示言語
+----------------------------------
+Settings > Language: Japanese switches menus to Japanese.
+設定 > English（英語） switches them back to English. English is the default.
+The category names, all command labels, file open-mode menu and Explorer
+heading change immediately. Technical help, errors and input syntax remain
+in their existing language; this setting translates menu labels.
+
+Language and explorer display mode are saved as plain text in ui.conf:
+  language=en   (or ja)
+  explorer=navigation   (or tree)
+Settings directory: YYTE_CONFIG_DIR if supplied; otherwise Windows uses
+%APPDATA%/yyterminal-editor and Linux uses $XDG_CONFIG_HOME/yyterminal-editor
+or ~/.config/yyterminal-editor. The next launch restores both preferences.
+Expanded directories and the current selection are not persisted.
+
+
+Large Markdown previews and tables / 大きなMarkdownと表
+-------------------------------------------------------
+Preview input is limited by UTF-8 byte size (128 MiB), not character count.
+Up to 1,000,000 display lines and 256 image references are supported.
+These defaults apply to yyte's full/split previews and markdownViewer.
+Document and line-limit messages identify omitted content. Standalone input
+over 128 MiB is rejected; yyte shows the supported prefix with a notice.
+Individual image/download limits and Mermaid diagram limits are unchanged.
+Output width (--width in markdownViewer) supports 1..4096 terminal cells.
+
+Preview layout runs on a worker; only visible rows are copied during screen
+updates. Up/Down, PageUp/PageDown, mouse wheel and Home/End navigate documents
+beyond 65,535 rows. Home also resets horizontal scrolling. Left/Right or a
+horizontal mouse wheel scroll wide tables. In a split preview, click the
+preview pane first to give these keys to it instead of the text editor.
+
+Markdown tables use a spreadsheet-style read-only grid:
+- Column letters (A..Z, AA..) and row numbers.
+- Distinct bold header rows, cell borders and alternating row colors.
+- Automatic column widths, shrinking to fit the viewport where possible.
+- Word-aware wrapping, Japanese/wide characters and cell height expansion.
+- Left/center/right alignment from Markdown's colon markers. Numeric values
+  in unmarked columns align right; display text is preserved (no calculation).
+- Bold, emphasis, strike-through, inline code and links retain visual styles.
+- <br>, <br/> and <br /> create a new line inside a cell.
+
+If there are too many columns for the viewport, scroll horizontally rather
+than breaking the grid. Color output needs a color-capable terminal; --plain
+retains borders, alignment and all text. Images inside table cells show their
+alt text. This is a preview: use the Markdown editor to change the source.

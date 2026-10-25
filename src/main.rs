@@ -21,7 +21,7 @@ use ui::draw;
 use unicode_width::UnicodeWidthStr;
 
 const HELP: &str = include_str!("../docs/user/help.md");
-use yyterminal_editor::commands::COMMANDS;
+use yyterminal_editor::commands::{COMMANDS, Language, MENUS, OPEN_MODES, label};
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Editor,
@@ -57,6 +57,7 @@ enum Message {
     Notice(Result<String>),
     Workspace(Result<Vec<PathBuf>>),
     Entries(Result<(PathBuf, Vec<PathBuf>)>),
+    TreeEntries(Result<(PathBuf, Vec<PathBuf>)>),
 }
 #[derive(Clone, Copy)]
 enum Prompt {
@@ -87,7 +88,6 @@ enum Prompt {
 }
 #[derive(Clone, Copy)]
 enum MouseAction {
-    Key(K),
     Run(&'static str),
     Tab(usize),
     CloseTab(usize),
@@ -98,6 +98,7 @@ enum MouseAction {
     RowSize(u64, u16),
     Entry(usize),
     Command(usize),
+    Menu(usize),
 }
 #[derive(Clone, Copy)]
 enum ResizeAxis {
@@ -133,6 +134,14 @@ struct App {
     encoding: Option<yy_core::Encoding>,
     entries: Vec<PathBuf>,
     selected: usize,
+    tree: bool,
+    expanded: std::collections::BTreeSet<PathBuf>,
+    language: Language,
+    settings_path: Option<PathBuf>,
+    menu_group: Option<usize>,
+    context_path: Option<PathBuf>,
+    pending_mode: Option<&'static str>,
+    fixed_path: Option<PathBuf>,
     tabs: Vec<Editor>,
     tab: usize,
     view: View,
@@ -145,7 +154,8 @@ struct App {
     preview_key: Option<(usize, yy_core::Version, u16, bool)>,
     preview_remote: bool,
     comparison: Option<diff::Comparison>,
-    scroll: u16,
+    scroll: usize,
+    preview_left: usize,
     status: String,
     busy: bool,
     pending_saves: std::collections::VecDeque<(usize, PathBuf)>,
@@ -181,6 +191,14 @@ impl App {
             root,
             entries: vec![],
             selected: 0,
+            tree: false,
+            expanded: Default::default(),
+            language: Language::English,
+            settings_path: None,
+            menu_group: None,
+            context_path: None,
+            pending_mode: None,
+            fixed_path: None,
             tabs: vec![Editor::empty()],
             tab: 0,
             view: View::Editor,
@@ -194,7 +212,8 @@ impl App {
             preview_remote: false,
             comparison: None,
             scroll: 0,
-            status: "Menu: commands / help | Files: explorer | +Terminal: new shell".into(),
+            preview_left: 0,
+            status: "View: explorer / preview | Tools: terminal / Git | Help: guide".into(),
             busy: false,
             pending_saves: std::collections::VecDeque::new(),
             tx,
@@ -223,6 +242,133 @@ impl App {
         app.read_dir(app.root.clone());
         app
     }
+    fn menu_commands(&self) -> &'static [&'static str] {
+        if self.context_path.is_some() {
+            OPEN_MODES
+        } else if let Some(group) = self.menu_group {
+            MENUS[group].commands
+        } else {
+            COMMANDS
+        }
+    }
+    fn show_menu(&mut self, group: usize) {
+        self.context_path = None;
+        self.menu_group = Some(group);
+        self.palette = Some(0);
+        self.palette_offset = 0;
+    }
+    fn close_menu(&mut self) {
+        self.palette = None;
+        self.palette_offset = 0;
+        self.menu_group = None;
+        self.context_path = None;
+    }
+    fn run_menu(&mut self, index: usize) {
+        let name = self.menu_commands()[index];
+        let path = self.context_path.clone();
+        self.close_menu();
+        if let Some(path) = path {
+            if self.busy {
+                return;
+            }
+            if name == "Open as fixed-length" {
+                self.fixed_path = Some(path);
+                self.ask(Prompt::Fixed);
+            } else {
+                self.busy = true;
+                self.pending_mode = Some(name);
+                self.status = "Opening private snapshot...".into();
+                let tx = self.tx.clone();
+                let encoding = self.encoding;
+                std::thread::spawn(move || {
+                    let _ = tx.send(Message::Open(Box::new(Editor::open(&path, encoding))));
+                });
+            }
+        } else {
+            self.command(name);
+        }
+    }
+    fn save_preferences(&mut self) {
+        let Some(path) = &self.settings_path else {
+            return;
+        };
+        let result = (|| -> Result<()> {
+            let parent = path.parent().context("Missing settings directory")?;
+            std::fs::create_dir_all(parent)?;
+            use std::io::Write;
+            let mut file = tempfile::NamedTempFile::new_in(parent)?;
+            writeln!(
+                file,
+                "language={}\nexplorer={}",
+                if self.language == Language::Japanese {
+                    "ja"
+                } else {
+                    "en"
+                },
+                if self.tree { "tree" } else { "navigation" }
+            )?;
+            file.persist(path)?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            self.status = format!("Settings: {e:#}");
+        }
+    }
+    fn load_preferences(&mut self) {
+        let base = std::env::var_os("YYTE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("yyterminal-editor"))
+            })
+            .or_else(|| {
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .map(|p| PathBuf::from(p).join("yyterminal-editor"))
+            })
+            .or_else(|| {
+                std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config/yyterminal-editor"))
+            });
+        self.settings_path = base.map(|p| p.join("ui.conf"));
+        self.read_preferences();
+    }
+    fn read_preferences(&mut self) {
+        if let Some(path) = &self.settings_path {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    for line in text.lines() {
+                        match line.trim() {
+                            "language=ja" => self.language = Language::Japanese,
+                            "language=en" => self.language = Language::English,
+                            "explorer=tree" => self.tree = true,
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => self.status = format!("Settings: {e}"),
+            }
+        }
+    }
+    fn toggle_tree_entry(&mut self, path: PathBuf) {
+        if self.expanded.remove(&path) {
+            self.entries
+                .retain(|entry| entry == &path || !entry.starts_with(&path));
+            self.expanded.retain(|entry| !entry.starts_with(&path));
+        } else {
+            self.busy = true;
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> Result<_> {
+                    let (entries, skipped) = yy_config::workspace::list_dir(&path)?;
+                    anyhow::ensure!(
+                        skipped == 0,
+                        "Directory exceeds the 10,000 entry display limit"
+                    );
+                    Ok((path, entries.into_iter().map(|e| e.path).collect()))
+                })();
+                let _ = tx.send(Message::TreeEntries(result));
+            });
+        }
+    }
     fn select_tab(&mut self, tab: usize) {
         if tab >= self.tabs.len() {
             return;
@@ -236,6 +382,7 @@ impl App {
         self.preview_focus = false;
         self.follow_caret = true;
         self.preview_key = None;
+        self.preview_left = 0;
         self.view = if self.tabs[tab].terminal.is_some() {
             View::Terminal
         } else {
@@ -261,7 +408,7 @@ impl App {
         }
     }
     fn request_preview(&mut self, width: u16) {
-        let width = width.clamp(1, 240);
+        let width = width.clamp(1, yyterminal_editor::preview::MAX_WIDTH);
         let key = (
             self.tab,
             self.tabs[self.tab].doc.version(),
@@ -287,15 +434,10 @@ impl App {
             let bytes = snapshot.read(
                 0..snapshot
                     .len()
-                    .min(yyterminal_editor::preview::MAX_MARKDOWN as u64),
+                    .min(yyterminal_editor::preview::MAX_MARKDOWN as u64 + 4),
             );
             let text = String::from_utf8_lossy(&bytes);
-            let mut rendered = yyterminal_editor::preview::render(&text, &opts);
-            if snapshot.len() > bytes.len() as u64 {
-                rendered
-                    .lines
-                    .push(ratatui::text::Line::raw("[Markdown truncated at 1 MiB]"));
-            }
+            let rendered = yyterminal_editor::preview::render(&text, &opts);
             let _ = tx.send(Message::Preview(rendered));
         });
     }
@@ -592,6 +734,12 @@ impl App {
                     self.view = View::Editor;
                     self.explorer = false;
                     self.status = "Opened".into();
+                    match self.pending_mode.take() {
+                        Some("Open as CSV") => self.table_mode(yy_delimited::Dialect::csv()),
+                        Some("Open as TSV") => self.table_mode(yy_delimited::Dialect::tsv()),
+                        Some("Open as delimited") => self.ask(Prompt::Delimiter),
+                        _ => {}
+                    }
                 }),
                 Message::Saved(result) => result.map(|(tab, path, version, hash)| {
                     let e = &mut self.tabs[tab];
@@ -602,6 +750,7 @@ impl App {
                 }),
                 Message::Workspace(result) => result.map(|roots| {
                     self.roots=roots;
+                    self.tree=false;self.expanded.clear();self.pending_mode=None;
                     self.entries=self.roots.clone();self.selected=0;self.explorer=true;
                     self.status="Workspace roots loaded. SSH and foreign OS paths are preserved but unavailable locally".into();
                 }),
@@ -609,14 +758,25 @@ impl App {
                     self.output = text;
                     self.status = "Git completed".into();
                 }),
+                Message::TreeEntries(result) => result.and_then(|(path, entries)| {
+                    anyhow::ensure!(self.entries.len() + entries.len() <= 20_000, "Tree exceeds the 20,000 visible entry limit; collapse a folder first");
+                    if let Some(index) = self.entries.iter().position(|p| p == &path) {
+                        self.expanded.insert(path);
+                        self.entries.splice(index + 1..index + 1, entries);
+                    }
+                    self.status = "Explorer loaded".into();
+                    Ok(())
+                }),
                 Message::Entries(result) => result.map(|(path, entries)| {
+                    self.expanded.clear();
+                    self.entries = entries.into_iter().filter(|p| !self.tree || p.parent() == Some(path.as_path())).collect();
                     self.root = path;
-                    self.entries = entries;
                     self.selected = 0;
                     self.status = "Explorer loaded".into();
                 }),
             };
             if let Err(e) = result {
+                self.pending_mode = None;
                 self.status = format!("{e:#}");
             }
         }
@@ -833,7 +993,11 @@ impl App {
         }
         if let Some(path) = self.entries.get(self.selected).cloned() {
             if path.is_dir() {
-                self.read_dir(path);
+                if self.tree {
+                    self.toggle_tree_entry(path);
+                } else {
+                    self.read_dir(path);
+                }
             } else {
                 self.open(path);
             }
@@ -909,9 +1073,17 @@ impl App {
             return;
         }
         if let Some(selected) = self.palette {
+            if matches!(event.kind, Kind::Down(MouseButton::Left) | Kind::Moved)
+                && let Some(MouseAction::Menu(group)) = action
+            {
+                self.show_menu(group);
+                return;
+            }
             match event.kind {
                 Kind::ScrollUp => self.palette = Some(selected.saturating_sub(3)),
-                Kind::ScrollDown => self.palette = Some((selected + 3).min(COMMANDS.len() - 1)),
+                Kind::ScrollDown => {
+                    self.palette = Some((selected + 3).min(self.menu_commands().len() - 1))
+                }
                 Kind::Moved => {
                     if let Some(MouseAction::Command(i)) = action {
                         self.palette = Some(i);
@@ -919,22 +1091,32 @@ impl App {
                 }
                 Kind::Down(MouseButton::Left) => {
                     if let Some(MouseAction::Command(i)) = action {
-                        self.palette = None;
-                        self.palette_offset = 0;
-                        self.command(COMMANDS[i]);
+                        self.run_menu(i);
                     } else if !self.palette_area.contains(point) {
-                        self.palette = None;
-                        self.palette_offset = 0;
+                        self.close_menu();
                     }
                 }
                 _ => {}
             }
             return;
         }
+        if event.kind == Kind::Down(MouseButton::Right)
+            && !self.busy
+            && let Some(MouseAction::Entry(index)) = action
+        {
+            self.selected = index;
+            if self.entries[index].is_file() {
+                self.context_path = Some(self.entries[index].clone());
+                self.menu_group = None;
+                self.palette = Some(0);
+                self.palette_offset = 0;
+            }
+            return;
+        }
         if event.kind == Kind::Down(MouseButton::Left) {
             match action {
-                Some(MouseAction::Key(key)) => {
-                    self.key(KeyEvent::new(key, M::NONE));
+                Some(MouseAction::Menu(group)) => {
+                    self.show_menu(group);
                     return;
                 }
                 Some(MouseAction::ColumnSize(c, width)) => {
@@ -1009,6 +1191,14 @@ impl App {
             return;
         }
         if self.preview_area.contains(point) {
+            if matches!(event.kind, Kind::ScrollLeft | Kind::ScrollRight) {
+                self.preview_left = if event.kind == Kind::ScrollLeft {
+                    self.preview_left.saturating_sub(4)
+                } else {
+                    self.preview_left.saturating_add(4)
+                };
+                return;
+            }
             if event.kind == Kind::Down(MouseButton::Left) {
                 self.preview_focus = true;
                 self.explorer = false;
@@ -1120,8 +1310,8 @@ impl App {
             .copied()
         else {
             if event.kind == Kind::Down(MouseButton::Right) && self.content_area.contains(point) {
+                self.close_menu();
                 self.palette = Some(0);
-                self.palette_offset = 0;
             }
             return;
         };
@@ -1150,6 +1340,7 @@ impl App {
             grid.col = c as usize;
         }
         if event.kind == Kind::Down(MouseButton::Right) {
+            self.close_menu();
             self.palette = Some(0);
         }
     }
@@ -1318,6 +1509,23 @@ impl App {
         }
 
         match name {
+            "Language: English" | "Language: Japanese" => {
+                self.language = if name == "Language: Japanese" {
+                    Language::Japanese
+                } else {
+                    Language::English
+                };
+                self.save_preferences();
+            }
+            "Folder tree" | "Folder navigation" => {
+                if self.busy {
+                    return;
+                }
+                self.tree = name == "Folder tree";
+                self.save_preferences();
+                self.read_dir(self.root.clone());
+            }
+            "Refresh explorer" => self.read_dir(self.root.clone()),
             "Spreadsheet mode" => self.make_workbook(false),
             "New workbook" => self.make_workbook(true),
             "Insert rows" => self.book_op(workbook::Op::InsertRows),
@@ -1390,6 +1598,8 @@ impl App {
             "Open encoding" => self.ask(Prompt::Encoding),
             "Workspace folders" => {
                 self.entries = self.roots.clone();
+                self.tree = false;
+                self.expanded.clear();
                 self.selected = 0;
                 self.explorer = true;
             }
@@ -1468,6 +1678,7 @@ impl App {
                 self.view = View::Editor;
                 self.explorer = false;
                 self.scroll = 0;
+                self.preview_left = 0;
             }
             "Copy" | "Cut" | "Paste" | "Undo" | "Redo" | "Select all" => {
                 if self.tabs[self.tab].terminal.is_some() {
@@ -1513,11 +1724,13 @@ impl App {
                 self.view = View::Preview;
                 self.explorer = false;
                 self.scroll = 0;
+                self.preview_left = 0;
             }
             "Help" => {
                 self.view = View::Help;
                 self.explorer = false;
                 self.scroll = 0;
+                self.preview_left = 0;
             }
             "Quit" => {
                 if self.busy || !self.pending_saves.is_empty() {
@@ -1700,13 +1913,14 @@ impl App {
                 if self.busy {
                     return;
                 }
+                let explicit_path = self.fixed_path.take();
                 let e = &self.tabs[self.tab];
-                if e.modified() {
+                if explicit_path.is_none() && e.modified() {
                     self.status =
                         "Save the document before opening it as fixed-length bytes".into();
                     return;
                 }
-                let Some(path) = e.path.clone() else {
+                let Some(path) = explicit_path.or_else(|| e.path.clone()) else {
                     self.status = "Open a data file first".into();
                     return;
                 };
@@ -1768,6 +1982,7 @@ impl App {
             match key.code {
                 K::Esc => {
                     self.prompt = None;
+                    self.fixed_path = None;
                 }
                 K::Enter
                     if matches!(prompt, Prompt::Cell | Prompt::BookCell)
@@ -1793,19 +2008,31 @@ impl App {
         }
         if let Some(selected) = self.palette {
             match key.code {
-                K::Esc => self.palette = None,
-                K::Down => self.palette = Some((selected + 1) % COMMANDS.len()),
-                K::Up => self.palette = Some((selected + COMMANDS.len() - 1) % COMMANDS.len()),
-                K::Enter => {
-                    self.palette = None;
-                    self.command(COMMANDS[selected]);
+                K::Esc => self.close_menu(),
+                K::Right if self.menu_group.is_some() => {
+                    self.show_menu((self.menu_group.unwrap() + 1) % MENUS.len())
                 }
+                K::Left if self.menu_group.is_some() => {
+                    self.show_menu((self.menu_group.unwrap() + MENUS.len() - 1) % MENUS.len())
+                }
+                K::Down => self.palette = Some((selected + 1) % self.menu_commands().len()),
+                K::Up => {
+                    self.palette = Some(
+                        (selected + self.menu_commands().len() - 1) % self.menu_commands().len(),
+                    )
+                }
+                K::Enter => self.run_menu(selected),
                 _ => {}
             }
             return;
         }
         match key.code {
-            K::F(1) | K::F(10) => {
+            K::F(10) => {
+                self.show_menu(0);
+                return;
+            }
+            K::F(1) => {
+                self.close_menu();
                 self.palette = Some(0);
                 return;
             }
@@ -1945,6 +2172,19 @@ impl App {
                 K::Down => self.scroll = self.scroll.saturating_add(1),
                 K::PageUp => self.scroll = self.scroll.saturating_sub(10),
                 K::PageDown => self.scroll = self.scroll.saturating_add(10),
+                K::Home => {
+                    self.scroll = 0;
+                    self.preview_left = 0;
+                }
+                K::End => {
+                    self.scroll = self
+                        .preview
+                        .lines
+                        .len()
+                        .saturating_sub(usize::from(self.preview_area.height))
+                }
+                K::Left => self.preview_left = self.preview_left.saturating_sub(4),
+                K::Right => self.preview_left = self.preview_left.saturating_add(4),
                 _ => {}
             }
             return;
@@ -1956,6 +2196,32 @@ impl App {
                     self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1))
                 }
                 K::Enter => self.open_selected_entry(),
+                K::Right if self.tree => {
+                    if let Some(path) = self.entries.get(self.selected) {
+                        if self.expanded.contains(path) {
+                            if self
+                                .entries
+                                .get(self.selected + 1)
+                                .is_some_and(|p| p.starts_with(path))
+                            {
+                                self.selected += 1;
+                            }
+                        } else if path.is_dir() {
+                            self.open_selected_entry();
+                        }
+                    }
+                }
+                K::Left if self.tree => {
+                    if let Some(path) = self.entries.get(self.selected).cloned() {
+                        if self.expanded.contains(&path) {
+                            self.toggle_tree_entry(path);
+                        } else if let Some(parent) = path.parent()
+                            && let Some(index) = self.entries.iter().position(|p| p == parent)
+                        {
+                            self.selected = index;
+                        }
+                    }
+                }
                 _ => {}
             }
             return;
@@ -2011,6 +2277,23 @@ impl App {
                 K::Down => self.scroll = self.scroll.saturating_add(1),
                 K::PageUp => self.scroll = self.scroll.saturating_sub(10),
                 K::PageDown => self.scroll = self.scroll.saturating_add(10),
+                K::Home if self.view == View::Preview => {
+                    self.scroll = 0;
+                    self.preview_left = 0;
+                }
+                K::End if self.view == View::Preview => {
+                    self.scroll = self
+                        .preview
+                        .lines
+                        .len()
+                        .saturating_sub(usize::from(self.preview_area.height))
+                }
+                K::Left if self.view == View::Preview => {
+                    self.preview_left = self.preview_left.saturating_sub(4)
+                }
+                K::Right if self.view == View::Preview => {
+                    self.preview_left = self.preview_left.saturating_add(4)
+                }
                 _ => {}
             }
             return;
@@ -2257,6 +2540,7 @@ fn main() -> Result<()> {
         .transpose()
         .context("Cannot open command-line file")?;
     let mut app = App::new(root);
+    app.load_preferences();
     app.encoding = encoding;
     run(app, initial)
 }
@@ -2720,6 +3004,164 @@ mod tests {
         });
     }
     #[test]
+    fn tree_expansion_keeps_root_siblings_and_collapses_descendants() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let child = dir.path().join("child");
+        let nested = child.join("nested");
+        std::fs::create_dir_all(&nested)?;
+        let file = nested.join("note.txt");
+        let sibling = dir.path().join("sibling.txt");
+        std::fs::write(&file, b"nested")?;
+        std::fs::write(&sibling, b"sibling")?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.command("Folder tree");
+        wait(&mut app);
+        assert!(
+            !app.entries
+                .iter()
+                .any(|p| Some(p.as_path()) == app.root.parent())
+        );
+        for path in [&child, &nested] {
+            app.selected = app.entries.iter().position(|p| p == path).unwrap();
+            app.open_selected_entry();
+            wait(&mut app);
+            assert_eq!(app.root, dir.path());
+            assert!(app.entries.contains(&sibling));
+        }
+        assert!(app.entries.contains(&file));
+        app.selected = app.entries.iter().position(|p| p == &child).unwrap();
+        app.open_selected_entry();
+        assert!(!app.entries.contains(&nested));
+        assert!(!app.entries.contains(&file));
+        assert!(app.expanded.is_empty());
+        assert!(app.entries.contains(&sibling));
+        app.open_selected_entry();
+        wait(&mut app);
+        assert!(app.entries.contains(&nested));
+        assert!(!app.entries.contains(&file));
+        app.command("Folder navigation");
+        wait(&mut app);
+        app.selected = app.entries.iter().position(|p| p == &child).unwrap();
+        app.open_selected_entry();
+        wait(&mut app);
+        assert_eq!(app.root, child);
+        Ok(())
+    }
+    #[test]
+    fn wrapped_file_continuations_open_context_mode_without_touching_unsaved_tab() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let filename = format!("{}日本語-long-target.csv", "long_".repeat(12));
+        let path = dir.path().join(&filename);
+        std::fs::write(&path, b"id,name\n1,Alice\n")?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        let index = app.entries.iter().position(|p| p == &path).unwrap();
+        app.selected = index;
+        let lines = ui::entry_lines(&app, index, 26);
+        assert!(lines.len() > 2);
+        assert_eq!(
+            lines.iter().map(|s| s.trim_start()).collect::<String>(),
+            filename
+        );
+        app.tabs[0].doc.insert_text("keep unsaved", false);
+        render_mouse(&mut app, 80, 20)?;
+        let rows = app
+            .mouse_actions
+            .iter()
+            .filter(|(_, a)| matches!(a,MouseAction::Entry(i) if *i==index))
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), lines.len());
+        let rect = rows.last().unwrap().0;
+        app.mouse(event::MouseEvent {
+            kind: event::MouseEventKind::Down(event::MouseButton::Right),
+            column: rect.x,
+            row: rect.y,
+            modifiers: M::NONE,
+        });
+        assert_eq!(app.context_path.as_ref(), Some(&path));
+        let mode = app
+            .menu_commands()
+            .iter()
+            .position(|c| *c == "Open as CSV")
+            .unwrap();
+        app.run_menu(mode);
+        wait(&mut app);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.tabs[1].path.as_ref(), Some(&path.canonicalize()?));
+        assert!(app.tabs[1].table.is_some());
+        assert!(app.view == View::Table);
+        assert_eq!(app.tabs[0].doc.snapshot().read(0..12), b"keep unsaved");
+        assert!(app.tabs[0].modified());
+        assert!(app.pending_mode.is_none());
+        Ok(())
+    }
+    #[test]
+    fn fixed_context_can_cancel_and_open_packed_file_without_decoding() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("records.bin");
+        let copybook = dir.path().join("record.cpy");
+        std::fs::write(&path, [0x12, 0x3c])?;
+        std::fs::write(
+            &copybook,
+            "       01 REC.\n          05 AMOUNT PIC 9(3) COMP-3.\n",
+        )?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.tabs[0].doc.insert_text("unsaved", false);
+        app.context_path = Some(path.clone());
+        app.palette = Some(0);
+        let mode = OPEN_MODES
+            .iter()
+            .position(|c| *c == "Open as fixed-length")
+            .unwrap();
+        app.run_menu(mode);
+        assert!(matches!(app.prompt, Some(Prompt::Fixed)));
+        app.key(KeyEvent::new(K::Esc, M::NONE));
+        assert!(app.fixed_path.is_none());
+        app.context_path = Some(path.clone());
+        app.palette = Some(0);
+        app.run_menu(mode);
+        app.input = "record.cpy;2;MS932;none".into();
+        app.key(KeyEvent::new(K::Enter, M::NONE));
+        wait(&mut app);
+        assert_eq!(app.tabs.len(), 2, "{}", app.status);
+        assert_eq!(app.tabs[1].path.as_ref(), Some(&path.canonicalize()?));
+        assert!(app.tabs[1].raw);
+        assert_eq!(app.tabs[1].doc.snapshot().read(0..2), [0x12, 0x3c]);
+        assert!(app.tabs[0].modified());
+        Ok(())
+    }
+    #[test]
+    fn language_preferences_round_trip_and_menus_fit_narrow_screens() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = dir.path().join("settings/ui.conf");
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.settings_path = Some(config.clone());
+        app.command("Language: Japanese");
+        app.command("Folder tree");
+        wait(&mut app);
+        let mut restored = App::new(dir.path().to_owned());
+        restored.settings_path = Some(config.clone());
+        restored.read_preferences();
+        wait(&mut restored);
+        assert_eq!(restored.language, Language::Japanese);
+        assert!(restored.tree);
+        for (width, height) in [(1, 1), (20, 8), (60, 15), (80, 24)] {
+            render_mouse(&mut restored, width, height)?;
+            restored.show_menu(8);
+            render_mouse(&mut restored, width, height)?;
+            restored.close_menu();
+        }
+        restored.command("Language: English");
+        restored.language = Language::Japanese;
+        restored.read_preferences();
+        assert_eq!(restored.language, Language::English);
+        assert!(std::fs::read_to_string(config)?.contains("explorer=tree"));
+        Ok(())
+    }
+    #[test]
     fn mouse_opens_menu_commands_and_blocks_background_clicks() -> Result<()> {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir(dir.path().join("child"))?;
@@ -2729,7 +3171,7 @@ mod tests {
         let menu = app
             .mouse_actions
             .iter()
-            .find(|(_, a)| matches!(a, MouseAction::Key(K::F(1))))
+            .find(|(_, a)| matches!(a, MouseAction::Menu(0)))
             .unwrap()
             .0;
         click(&mut app, menu);
@@ -2738,7 +3180,9 @@ mod tests {
         let new = app
             .mouse_actions
             .iter()
-            .find(|(_, a)| matches!(a,MouseAction::Command(i) if COMMANDS[*i]=="New file"))
+            .find(
+                |(_, a)| matches!(a,MouseAction::Command(i) if app.menu_commands()[*i]=="New file"),
+            )
             .unwrap()
             .0;
         let count = app.tabs.len();

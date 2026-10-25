@@ -10,7 +10,7 @@ cargo run --release --locked -- README.md
 cargo run --release --locked -- --encoding IBM-930/fixed:80 host.dat
 ```
 
-Rust 1.99.0、UTF-8端末、Git、シェルが必要です。上部メニューとタブはマウスで操作できます。F1/F10・F6・F4も代替ショートカットとして使えます。`Split` でMarkdownの編集とプレビューを並べられます。`yyte --help` は端末UIを起動せず操作説明を表示します。Windowsでのビルド・モデル試験にも対応しますが、実際のCUI統合試験はLinuxで行っています。
+Rust 1.99.0、UTF-8端末、Git、シェルが必要です。上部メニューとタブはマウスで操作できます。F1/F10・F6・F4も代替ショートカットとして使えます。`表示 > Markdownを並べてプレビュー`（英語では `View > Split Markdown preview`）で編集とプレビューを並べられます。`yyte --help` は端末UIを起動せず操作説明を表示します。Windowsでのビルド・モデル試験にも対応しますが、実際のCUI統合試験はLinuxで行っています。
 
 ファイルは専用の作業用コピーを編集し、描画では画面内の範囲のみ読みます。作業用ディスクがファイルサイズ相当必要です。保存時には外部変更を照合します。64MiBファイルと100万文字の単一行で回帰試験を実施しています。大容量での総合性能評価は今後実施します。
 
@@ -24,3 +24,7 @@ Rust 1.99.0、UTF-8端末、Git、シェルが必要です。上部メニュー�
 - [実装状況](docs/history/implementation-status.md)
 
 ライセンス: GPL-3.0-or-later。[COPYING](COPYING) を参照してください。
+
+メニューはyyeditor・yysheetを基に、ファイル、編集、検索、表示、挿入・削除、書式、データ、ツール、設定、ヘルプに分類しています。`Settings > Language: Japanese` で日本語へ、`設定 > English（英語）` で英語へ切り替えられます。`表示` でフォルダーのツリー表示を選べ、長いファイル名は折り返します。ファイルの右クリックからCSV・TSV・固定長などの開くモードを指定できます。設定と操作の詳細は[利用者向けヘルプ](docs/user/help.md)を参照してください。
+
+Markdownプレビューは128MiB・100万表示行へ対応し、表を行番号・列記号・罫線・セル折り返し・数値の右寄せを持つグリッドで表示します。全画面・エディタとの並列表示・単独の `markdownViewer` で共通の描画を利用します。詳しくは[Markdownプレビュー](docs/user/markdown-viewer.md)を参照してください。
