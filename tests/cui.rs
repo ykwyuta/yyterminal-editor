@@ -808,3 +808,90 @@ fn large_preview_end_navigation_and_spreadsheet_table_render_in_both_apps() -> R
     }
     Ok(())
 }
+
+#[test]
+fn editor_and_markdown_preview_highlight_languages_and_allow_manual_override() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("sample.rs");
+    let original = "fn main() {\n    let value = \"日本語\"; // note\n}\n";
+    std::fs::write(&path, original)?;
+    let markdown = dir.path().join("syntax.md");
+    std::fs::write(
+        &markdown,
+        format!("# Syntax sample\n\n```rust\n{original}```\n"),
+    )?;
+    let colored = |screen: &yy_term::Terminal, needle: &str, rgb: (u8, u8, u8)| {
+        (0..screen.rows()).any(|y| {
+            let row = screen.screen_row(y);
+            let text = row.text();
+            text.find(needle).is_some_and(|at| {
+                let x = unicode_width::UnicodeWidthStr::width(&text[..at]);
+                row.cells
+                    .get(x)
+                    .is_some_and(|c| c.attr.fg == yy_term::Color::Rgb(rgb.0, rgb.1, rgb.2))
+            })
+        })
+    };
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.wait_for("Rust editor keyword highlighting", |s| {
+        colored(s, "let value", (198, 120, 221))
+    })?;
+    app.wait_for("Rust editor comment highlighting", |s| {
+        colored(s, "// note", (127, 135, 145))
+    })?;
+    app.command("Syntax language")?;
+    app.wait("Syntax: auto / none")?;
+    app.send(b"none\r")?;
+    app.wait("Syntax: none")?;
+    app.wait_for("highlight disabled", |s| {
+        !colored(s, "let value", (198, 120, 221))
+    })?;
+    app.command("Syntax language")?;
+    app.wait("Syntax: auto / none")?;
+    app.send(b"auto\r")?;
+    app.wait_for("automatic syntax restored", |s| {
+        colored(s, "let value", (198, 120, 221))
+    })?;
+    app.send(b"\x0fsyntax.md\r")?;
+    app.wait_for("Markdown source embedded Rust highlighting", |s| {
+        s.screen_text().contains("[syntax.md]") && colored(s, "let value", (198, 120, 221))
+    })?;
+    app.send(b"\x1b[15~")?;
+    app.wait("Markdown preview ready")?;
+    app.wait_for("preview Rust keyword highlighting", |s| {
+        colored(s, "let value", (198, 120, 221))
+    })?;
+    app.finish()?;
+    ensure!(
+        std::fs::read_to_string(&path)? == original,
+        "Highlighting changed file bytes"
+    );
+    let mut viewer = Harness::with_exe(&markdown, env!("CARGO_BIN_EXE_markdownViewer"))?;
+    viewer.wait("Ready")?;
+    viewer.wait_for("standalone Rust keyword highlighting", |s| {
+        colored(s, "let value", (198, 120, 221))
+    })?;
+    viewer.click_text("[Close]")?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = viewer.child.try_wait()? {
+            ensure!(status.success(), "Viewer exit failed");
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Viewer did not exit: {}",
+            viewer.screen.screen_text()
+        );
+        if let Ok(bytes) = viewer
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            viewer.screen.feed(&bytes);
+        }
+    }
+    Ok(())
+}

@@ -59,3 +59,19 @@ stateDiagram-v2
 | **顧客一覧** | 1,234 | Ready | Japanese text wraps inside the cell; every column stays aligned. |
 | `records.dat` | 42 | Review | Fixed-length records<br>with packed decimal fields |
 | [Markdown guide](../docs/user/help.md) | 100000 | Done | Read-only preview with column letters and row numbers. |
+
+
+## Syntax highlighting
+
+```rust
+fn main() {
+    let message = "Hello, 日本語"; // Rust keywords, string and comment
+    println!("{}", message);
+}
+```
+
+```sql
+SELECT customer_id, 'active' AS status
+FROM customers
+WHERE customer_id >= 42; -- SQL keyword, string and number
+```

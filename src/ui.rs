@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -384,6 +384,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 Some(Prompt::Cell) => "Edit cell: Ctrl+A clear / Alt+Enter newline / Enter apply",
                 Some(Prompt::Fixed) => "COPYBOOK;RECORD_BYTES;CHARSET;SEPARATOR",
                 Some(Prompt::Delimiter) => "Delimiter (e.g. , or \\t or |)",
+                Some(Prompt::Syntax) => {
+                    "Syntax: auto / none / rust / sql / python / markdown / ..."
+                }
                 Some(Prompt::Encoding) => "Next open: auto, CP932, IBM-930/fixed:80, ...",
                 _ => "Unsaved changes: type discard to quit",
             };
@@ -880,31 +883,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         rows = e.rows(area.height as usize, area.width as usize);
     }
     let selection = e.doc.selections().primary().range();
-    let show = |bytes: Vec<u8>| {
-        String::from_utf8_lossy(&bytes)
-            .replace('\t', "    ")
-            .chars()
-            .filter(|c| *c != '\r' && *c != '\n')
-            .map(|c| if c.is_control() { '�' } else { c })
-            .collect::<String>()
-    };
-    let lines = rows
-        .iter()
-        .map(|(start, end, text)| {
-            if selection.start < *end && selection.end > *start {
-                let a = selection.start.clamp(*start, *end);
-                let b = selection.end.clamp(a, *end);
-                let snapshot = e.doc.snapshot();
-                Line::from(vec![
-                    Span::raw(show(snapshot.read(*start..a))),
-                    Span::styled(show(snapshot.read(a..b)), Style::default().bg(Color::Blue)),
-                    Span::raw(show(snapshot.read(b..*end))),
-                ])
-            } else {
-                Line::raw(text.clone())
-            }
-        })
-        .collect::<Vec<_>>();
+    let lines = e.syntax.lines(
+        e.doc.snapshot(),
+        e.doc.version(),
+        e.path.as_deref(),
+        e.syntax_language.as_deref(),
+        &rows,
+        selection,
+    );
     frame.render_widget(Paragraph::new(lines), area);
     if !app.explorer
         && !app.preview_focus

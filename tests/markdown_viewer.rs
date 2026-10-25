@@ -86,3 +86,31 @@ fn standalone_large_markdown_prints_table_after_former_limits() -> Result<()> {
     assert!(!text.contains("limit reached") && !text.contains("truncated"));
     Ok(())
 }
+
+#[test]
+fn syntax_colors_code_fences_and_plain_output_keeps_source_text() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("syntax.md");
+    std::fs::write(&path, "```rust\nlet text = \"日本語\"; // note\n```\n")?;
+    let colored = Command::new(env!("CARGO_BIN_EXE_markdownViewer"))
+        .args(["--print", "--color"])
+        .arg(&path)
+        .output()?;
+    assert!(colored.status.success());
+    let output = String::from_utf8(colored.stdout)?;
+    for color in ["198;120;221", "152;195;121", "127;135;145"] {
+        assert!(
+            output.contains(&format!("\u{1b}[38;2;{color}m")),
+            "{output}"
+        );
+    }
+    let plain = Command::new(env!("CARGO_BIN_EXE_markdownViewer"))
+        .arg("--plain")
+        .arg(&path)
+        .output()?;
+    assert!(plain.status.success());
+    let output = String::from_utf8(plain.stdout)?;
+    assert!(output.contains("let text = \"日本語\"; // note"));
+    assert!(!output.contains('\u{1b}'));
+    Ok(())
+}

@@ -417,3 +417,51 @@ If there are too many columns for the viewport, scroll horizontally rather
 than breaking the grid. Color output needs a color-capable terminal; --plain
 retains borders, alignment and all text. Images inside table cells show their
 alt text. This is a preview: use the Markdown editor to change the source.
+
+
+Syntax highlighting / シンタックスハイライト
+--------------------------------------------
+Text editor tabs automatically detect syntax from the file name/extension,
+first-line shebang or supported modeline, using yyeditor's shared yy-syntax
+library. Keywords, strings, comments, numbers, types and functions have
+separate colors. Markdown source headings/links and fenced code are styled;
+Rust/Python/etc. inside a Markdown code fence use that language's rules.
+Selection keeps its blue background while retaining syntax foreground colors.
+
+View > Syntax language / 表示 > シンタックスの言語 changes the active text tab:
+  auto: restore automatic detection
+  none (plain/text also accepted): disable highlighting
+  rust, sql, python, javascript, ...: force a syntax for this tab
+The override is per-tab and is not saved to the file or global preferences.
+An unknown manual language is rejected without changing the current setting.
+Unknown file types and unknown fenced languages display as ordinary text.
+
+Built-in language IDs:
+c, cpp, csharp, java, rust, go, python, javascript, typescript, php, ruby,
+perl, vb, kotlin, swift, batch, powershell, shell, html, xml, css, json,
+yaml, toml, ini, markdown, sql, cobol, cobol-free, jcl, rhai, pli, rpg,
+log, diff, makefile, dockerfile, gitignore.
+Aliases/extensions such as js, ts, rs, sh and ps1 are also accepted.
+COBOL is fixed-column syntax; use cobol-free for free-format source.
+CSV/fixed-length table views, workbooks and terminal screens keep their own
+existing rendering; syntax highlighting changes only text editor content.
+
+Markdown preview code fences use the language after the opening marker:
+```rust
+let count = 42; // a comment
+```
+Full/split previews and standalone markdownViewer use the same colors and
+multiline state. Mermaid fences still become diagrams. No code is executed.
+--plain removes ANSI colors but preserves code text; --print --color emits
+syntax colors. Truecolor support depends on the terminal.
+
+Editor analysis runs on a worker with a 256 KiB context and at most 256 KiB
+of visible source per request. Results are cached by document version,
+viewport and language. Unchanged scrolling reuses nearby lexical checkpoints;
+edits and language/path changes invalidate incompatible results. Display is
+plain while a new result is pending. A distant jump without a checkpoint
+may approximate multiline state when its opening lies outside the context.
+The shared engine colors up to 64 KiB per logical line; a longer tail stays
+plain. These analysis limits do not truncate the editable document or saved
+bytes. Preview code blocks preserve state from their beginning, with the
+same per-logical-line analysis limit.

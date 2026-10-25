@@ -1,6 +1,7 @@
 pub const COMMANDS: &[&str] = &[
     "Open file",
     "Open encoding",
+    "Syntax language",
     "Workspace folders",
     "Save",
     "Save as",
@@ -121,6 +122,7 @@ pub const MENUS: &[Menu] = &[
         japanese: "表示",
         commands: &[
             "Explorer",
+            "Syntax language",
             "Folder tree",
             "Folder navigation",
             "Refresh explorer",
@@ -208,6 +210,7 @@ pub fn label(command: &str, language: Language) -> &str {
     }
     match command {
         "Open file" => "ファイルを開く",
+        "Syntax language" => "シンタックスの言語",
         "Open encoding" => "文字コードを指定",
         "Workspace folders" => "ワークスペースのフォルダー",
         "Save" => "保存",

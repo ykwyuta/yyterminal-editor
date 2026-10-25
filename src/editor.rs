@@ -10,6 +10,8 @@ use yy_core::{Document, OpenOptions, Selection, SelectionSet, Version};
 
 pub struct Editor {
     pub doc: Document,
+    pub syntax: yyterminal_editor::syntax::EditorHighlighter,
+    pub syntax_language: Option<String>,
     pub terminal: Option<crate::shell::Shell>,
     pub term_back: usize,
     pub raw: bool,
@@ -42,6 +44,8 @@ impl Editor {
     pub fn empty() -> Self {
         let doc = Document::new_empty();
         Self {
+            syntax: Default::default(),
+            syntax_language: None,
             terminal: None,
             term_back: 0,
             saved: doc.version(),
@@ -101,6 +105,8 @@ impl Editor {
             bail!("{error}");
         }
         Ok(Self {
+            syntax: Default::default(),
+            syntax_language: None,
             terminal: None,
             term_back: 0,
             saved: doc.version(),

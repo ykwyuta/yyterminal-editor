@@ -319,11 +319,8 @@ fn render_limited(
                             lines.grid(Line::styled(line, Style::default().fg(Color::Cyan)));
                         }
                     } else {
-                        lines.extend(
-                            source
-                                .lines()
-                                .map(|s| Line::styled(text(s), Style::default().fg(Color::Yellow))),
-                        );
+                        let mut highlighter = crate::syntax::CodeHighlighter::new(&lang);
+                        lines.extend(source.lines().map(|s| highlighter.line(s)));
                     }
                 }
             }
@@ -634,6 +631,30 @@ mod tests {
                     .contains("line limit")
             );
         }
+    }
+    #[test]
+    fn fenced_code_uses_language_tokens_and_keeps_multiline_state_after_wrapping() {
+        let source = "```rust\n/* open\nstill comment\n*/ let text = \"日本語\";\n```\n\n```sql\nSELECT 42, 'text';\n```\n";
+        let rendered = render(source, &Options::new(PathBuf::from("."), 80));
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .flat_map(|l| &l.spans)
+                .any(|s| s.content.contains("still comment")
+                    && s.style.fg == crate::syntax::token_style("comment").fg)
+        );
+        for keyword in ["let", "SELECT"] {
+            assert!(
+                rendered
+                    .lines
+                    .iter()
+                    .flat_map(|l| &l.spans)
+                    .any(|s| s.content.contains(keyword)
+                        && s.style.fg == crate::syntax::token_style("keyword").fg)
+            );
+        }
+        assert!(rendered.plain().contains("日本語"));
     }
     #[test]
     fn controls_limits_and_unclosed_fences_are_safe() {

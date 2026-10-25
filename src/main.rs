@@ -66,6 +66,7 @@ enum Prompt {
     Find,
     Commit,
     Encoding,
+    Syntax,
     Delimiter,
     Fixed,
     Cell,
@@ -781,6 +782,7 @@ impl App {
             }
         }
         for tab in &mut self.tabs {
+            changed |= tab.syntax.poll();
             if let Some(shell) = &mut tab.terminal {
                 if let Err(error) = shell.poll() {
                     self.status = error.to_string();
@@ -1595,6 +1597,13 @@ impl App {
                 }
             }
             "Open file" => self.ask(Prompt::Open),
+            "Syntax language" => {
+                if self.tabs[self.tab].terminal.is_some() || self.tabs[self.tab].raw {
+                    self.status = "Select a text document for syntax highlighting".into();
+                } else {
+                    self.ask(Prompt::Syntax);
+                }
+            }
             "Open encoding" => self.ask(Prompt::Encoding),
             "Workspace folders" => {
                 self.entries = self.roots.clone();
@@ -1935,6 +1944,20 @@ impl App {
                     })();
                     let _ = tx.send(Message::Fixed(Box::new(result)));
                 });
+            }
+            Prompt::Syntax => {
+                let name = input.trim().to_ascii_lowercase();
+                if yyterminal_editor::syntax::valid_language(&name) {
+                    self.tabs[self.tab].syntax_language = if name == "auto" {
+                        None
+                    } else {
+                        Some(name.clone())
+                    };
+                    self.status = format!("Syntax: {name}");
+                } else {
+                    self.status =
+                        format!("Unknown syntax: {name}; choose a language listed in Help");
+                }
             }
             Prompt::Encoding => {
                 if input.eq_ignore_ascii_case("auto") {
