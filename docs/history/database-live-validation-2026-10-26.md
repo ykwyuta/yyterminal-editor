@@ -29,3 +29,16 @@ Db2の実測計画は、yyteがSQL送信前に拒否するため対象外。推�
 ## 成果物
 
 `target/database-live/` 下の `20261026T-win-85edd25`、`20261026T-linux-85edd25` にログとDB別の計画・SVG・ER YAMLを保存した（リポジトリには含めない）。releaseビルドと `tools/release.py verify`、ARM64での実接続は未検証で、CIで確認する。再現手順は [外部5DB実接続試験](../developer/database-live-tests.md) を参照。
+
+## 追記：Db2実測計画の有効化（`c53441c`）
+
+上流 `5d2dbfc` はDb2のsection actualsをRust直接接続で取得するため、ODBCを理由にした事前拒否を削除した。`実行計画 > Db2実測収集の準備SQL` は上流の `DB2_ACTUAL_SETUP_SQL` を新しいSQLタブへ表示するだけで送信しない。
+
+共有デモにはモニターを追加せず、yydbmanagerの検証用Compose `apps/yydbmanager/tests/docker/compose.yml` の `db2` サービス（プロジェクト `yydbmanager-validation`、`icr.io/db2_community/db2:12.1.5.0`）を新規に起動して検証した。Composeは変更していない。新しい `tests/db2_actual_plan.rs` は上流 `docker_live` と同じ文で一時表スペース・EXPLAIN表・`YYDBMANAGER_ACTIVITY` を準備する。
+
+- 準備前：200行の試験表への `DELETE` の実測計画は「一時表を準備できません…SQLは実行していません」で失敗し、行数は200のままだった。
+- 準備後：集約SQLの推定計画、実測計画とも6演算子。実測計画では6演算子すべてに実測行数があった。SVG出力、yyplan保存往復の一致を確認した。
+- Windows x64：fmt・Clippy・`tools/test_release.py`・通常99試験が成功した。`db2_actual_plan` は初回（準備前の拒否を含む）と2回目（準備済み）の両方で成功した。
+- Linux x64（unixODBC未導入）：fmt・Clippy・PTY実端末16件を含む通常117試験、`database_live` 5試験、`plan_scenarios`（計画180件）、`db2_actual_plan` が成功した。`ldd` にODBCライブラリは無かった。
+
+検証用Db2は試験後も起動したまま残している（モニター作成済み）。不要なら `docker compose -p yydbmanager-validation -f ../yyeditor/apps/yydbmanager/tests/docker/compose.yml down` で停止できる。成果物は `target/database-live/20261026T-win-db2-actual`、`20261026T-win-db2-actual-rerun`、`20261026T-linux-c53441c`。Db2実測計画の端末画面（PTY）での操作確認は未実施で、ワーカー経由の取得・描画データを検証した。
