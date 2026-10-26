@@ -2597,7 +2597,24 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                         app.mouse_repeated(mouse, repeats);
                     }
                 }
-                Event::Key(key) => app.key(key),
+                Event::Key(key) => {
+                    let text = if app.view == View::Editor
+                        && app.prompt.is_none()
+                        && app.palette.is_none()
+                        && !app.explorer
+                        && !app.preview_focus
+                    {
+                        inputs.text_burst(&Event::Key(key))?
+                    } else {
+                        None
+                    };
+                    if let Some(text) = text {
+                        app.follow_caret = true;
+                        app.tabs[app.tab].doc.insert_text(&text, false);
+                    } else {
+                        app.key(key);
+                    }
+                }
                 Event::Paste(text) => {
                     if app.palette.is_some() {
                         // Pasting into a command menu must not edit the document beneath it.

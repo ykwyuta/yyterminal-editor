@@ -1,5 +1,7 @@
 # 描画性能の測定
 
+本文編集では、貼り付けが通常のキー列として届く場合も、受信済みの文字・改行・Tabを最大64 KiB程度または8 msまでまとめて文書へ反映し、その後に描画する。Linuxではcrosstermの `use-dev-tty` によるpoll方式を使い、読み残した長文入力の通知を取りこぼさないようにする。このバックエンドはゼロタイムアウトでは内部の入力キューも確認しないため、入力確認のタイムアウトを最低1 msにする。Tabは通常入力と同じ4空白に変換する。単独キーは通常の編集経路を通し、キー解放は通常入力と同じく無視し、ショートカット・マウスなどに達したらそこで区切り、次のイベントとして保持する。メニュー・プロンプト・他のビューではこの本文入力の集約を行わない。bracketed pasteは従来どおり貼り付けイベント全体を一括反映する。
+
 ```powershell
 $env:YYTE_BENCH_OUTPUT='target/render-measurement.json'
 cargo test --locked --bin yyte drawing_scenarios_benchmark -- --ignored --nocapture

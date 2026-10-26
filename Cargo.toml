@@ -16,7 +16,8 @@ path = "src/bin/markdown_viewer.rs"
 
 [dependencies]
 anyhow = "1"
-crossterm = "0.28.1"
+# The poll-based Unix backend keeps unread paste bytes ready across bounded reads.
+crossterm = { version = "0.28.1", features = ["use-dev-tty"] }
 ratatui = "0.29.0"
 portable-pty = "0.9.0"
 pulldown-cmark = "0.13"
@@ -48,3 +49,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 yy-draw = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

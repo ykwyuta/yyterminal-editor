@@ -55,6 +55,33 @@ fn interactive_editor_save_preview_shell_resize_and_exit() -> Result<()> {
     app.finish()
 }
 
+#[test]
+fn long_paste_saves_all_lines_with_and_without_bracketed_paste() -> Result<()> {
+    for bracketed in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("paste.txt");
+        std::fs::write(&path, "tail")?;
+        let mut app = Harness::new(&path)?;
+        app.wait("Opened")?;
+        let text = "日本語 long paste line\n".repeat(2000);
+        let payload = if bracketed {
+            format!("\x1b[200~{text}\x1b[201~\x13")
+        } else {
+            format!("{}\x13", text.replace('\n', "\r"))
+        };
+        app.send_bounded(payload.as_bytes())?;
+        app.wait("Saved")?;
+        let expected = format!("{text}tail");
+        ensure!(
+            std::fs::read_to_string(&path)? == expected,
+            "Paste content differs (bracketed={bracketed}); screen: {}",
+            app.screen.screen_text()
+        );
+        app.finish()?;
+    }
+    Ok(())
+}
+
 struct Harness {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
@@ -107,6 +134,45 @@ impl Harness {
     }
     fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+    fn send_bounded(&mut self, mut bytes: &[u8]) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !bytes.is_empty() {
+            let mut fd = libc::pollfd {
+                fd: self._master.as_raw_fd().context("PTY has no descriptor")?,
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            ensure!(
+                !remaining.is_zero(),
+                "Paste send timed out: {}",
+                self.screen.screen_text()
+            );
+            // This descriptor belongs to the master held by this Harness.
+            let ready = unsafe { libc::poll(&mut fd, 1, remaining.as_millis().min(100) as i32) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error.into());
+            }
+            if ready > 0 {
+                ensure!(
+                    fd.revents & libc::POLLOUT != 0,
+                    "PTY closed during paste: {}",
+                    self.screen.screen_text()
+                );
+                // Stay below the PTY's writable low-water mark so a single
+                // blocking write cannot fill its input queue after poll.
+                let n = self.writer.write(&bytes[..bytes.len().min(64)])?;
+                ensure!(n > 0, "PTY accepted no paste bytes");
+                bytes = &bytes[n..];
+            }
+        }
         self.writer.flush()?;
         Ok(())
     }
