@@ -144,7 +144,7 @@ WindowsはZIP、Linuxは実行権限付きtar.gz。ファイル名の `x86_64`�
 
 `db_app.rs` は接続ウィザード、オブジェクトツリー、SQLタブ、結果グリッド、プロパティ、ERとメニューを仲介する。`database_plan.rs` は元のdrawingの配置をセル座標へ変換し、元のlabels/details/flow_width/warningを使用する。画面内だけを描き、巨大なキャンバスを全セル展開しない。図の選択はデータ上のノードindexへ対応し、エッジのプロパティも区別する。ER文書のview情報は読み込み・再保存時に保持する。
 
-Linuxは `apt-get install libssl-dev pkg-config cmake` が必要。固定した `yy-db-core`（yyeditor `5d2dbfc`）はODBC（`odbc-api`）を含まず、Db2もRust直接接続（rust-db2-driver）を使う。既定機能が戻っても取り込まないよう `default-features = false` で参照する。このためWindowsの `odbc32`、Linuxの unixODBC へリンクしない。汎用ODBC接続文字列とDb2実測計画は使用できない。`database.rs` はODBC形式の接続先を保存・接続の両方で拒否し、`db_app.rs` はDb2の実測計画をSQL送信前に拒否する。`tools/release.py verify` と梱包処理は、ELFの `DT_NEEDED` とPEのインポート表・遅延インポート表を読み、`libodbc.*`／`odbc32.dll` へのリンクがあれば失敗する。同梱文書の文字列はリンクとして扱わない。DuckDB 1.4.1の同梱C++ビルドのためCIは2ジョブを上限とし、初回ビルドの時間枠とキャッシュを分ける。Windows x64はVS 2022を維持する。ARM64は各ネイティブCIで検証する。
+Linuxは `apt-get install libssl-dev pkg-config cmake` が必要。固定した `yy-db-core`（yyeditor `5d2dbfc`）はODBC（`odbc-api`）を含まず、Db2もRust直接接続（rust-db2-driver）を使う。既定機能が戻っても取り込まないよう `default-features = false` で参照する。このためWindowsの `odbc32`、Linuxの unixODBC へリンクしない。汎用ODBC接続文字列は使用できない。`database.rs` はODBC形式の接続先を保存・接続の両方で拒否する。Db2実測計画は `yy-db-core` の直接接続実装をそのまま使い、一時表スペースや `YYDBMANAGER_ACTIVITY` が無ければ対象SQLの実行前に失敗する。`DB Db2 actual setup SQL` は `yy_db_core::plan::DB2_ACTUAL_SETUP_SQL` を新しいSQLタブへ表示するだけで、送信しない。`tools/release.py verify` と梱包処理は、ELFの `DT_NEEDED` とPEのインポート表・遅延インポート表を読み、`libodbc.*`／`odbc32.dll` へのリンクがあれば失敗する。同梱文書の文字列はリンクとして扱わない。DuckDB 1.4.1の同梱C++ビルドのためCIは2ジョブを上限とし、初回ビルドの時間枠とキャッシュを分ける。Windows x64はVS 2022を維持する。ARM64は各ネイティブCIで検証する。
 
 Windowsのモデル／画面バッファ試験のほか、Linux実端末試験でSQLの結果・コピー・計画とサイズ変更を確認する。7種類の計画fixtureは `demo/database` に置く。直接接続の実サーバー試験とファイルだけの描画試験は区別する。
 

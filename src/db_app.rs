@@ -515,17 +515,6 @@ impl App {
                 }
                 "DB Disconnect" => self.db.as_mut().unwrap().send(Request::Disconnect),
                 "DB Execute" | "DB Estimated plan" | "DB Actual plan" => {
-                    let d = self.db.as_ref().unwrap();
-                    if name == "DB Actual plan"
-                        && d.profiles
-                            .iter()
-                            .any(|p| p.name == d.active && p.kind == DbKind::Db2)
-                    {
-                        return Err(
-                            "Db2 actual plans need ODBC, which yyte does not use; the SQL was not run"
-                                .into(),
-                        );
-                    }
                     self.tabs[self.tab].database = true;
                     let sql = self.db_sql()?;
                     self.db.as_mut().unwrap().send(if name == "DB Execute" {
@@ -552,6 +541,11 @@ impl App {
                 "DB Results" => self.db.as_mut().unwrap().pane = Pane::Results,
                 "DB Plan" => self.db.as_mut().unwrap().pane = Pane::Plan,
                 "DB Messages" => self.db.as_mut().unwrap().pane = Pane::Messages,
+                "DB Db2 actual setup SQL" => {
+                    // Shown for review only: it changes server-wide monitoring, so never run it here.
+                    self.db_new_text(yy_db_core::plan::DB2_ACTUAL_SETUP_SQL, true);
+                    self.status = "Db2 actual-plan setup SQL shown, not executed: a DBA reviews and runs the needed statements".into();
+                }
                 "DB Open plan" => self.db_prompt(Input::OpenPlan),
                 "DB Save plan" => self.db_prompt(Input::SavePlan),
                 "DB Plan SVG" => self.db_prompt(Input::PlanSvg),
@@ -2303,7 +2297,7 @@ mod tests {
         );
     }
     #[test]
-    fn odbc_profiles_and_db2_actual_plans_are_refused_without_running_sql() {
+    fn odbc_profiles_are_refused_and_db2_setup_sql_is_only_shown() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().to_owned());
         app.command("DB Manager");
@@ -2321,33 +2315,16 @@ mod tests {
         profiles.push(odbc);
         assert!(db::save_profiles(&d.profile_path, &profiles).is_err());
         assert!(!d.profile_path.exists());
-        let target = yy_db_core::native::Config {
-            host: "localhost".into(),
-            port: 25000,
-            database: "demo".into(),
-            username: "test".into(),
-            password: String::new(),
-            tls: "require".into(),
-            ca_file: None,
-            trust_server_certificate: false,
-        }
-        .encode()
-        .unwrap();
-        d.profiles.push(db::Profile {
-            name: "db2".into(),
-            kind: DbKind::Db2,
-            target,
-            read_only: false,
-            password_env: String::new(),
-        });
-        d.active = "db2".into();
-        app.tabs[app.tab].doc.insert_text("DELETE FROM t", false);
-        app.command("DB Actual plan");
-        assert!(
-            app.status.contains("Db2 actual plans need ODBC"),
-            "{}",
-            app.status
+        let tabs = app.tabs.len();
+        app.command("DB Db2 actual setup SQL");
+        assert_eq!(app.tabs.len(), tabs + 1);
+        assert!(app.tabs[app.tab].database);
+        // The editor inserts the platform line ending.
+        assert_eq!(
+            app.db_sql().unwrap().replace("\r\n", "\n"),
+            yy_db_core::plan::DB2_ACTUAL_SETUP_SQL
         );
+        assert!(app.status.contains("not executed"), "{}", app.status);
         assert!(!app.db.as_ref().unwrap().busy);
     }
 }

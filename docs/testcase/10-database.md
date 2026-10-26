@@ -4,7 +4,7 @@
 
 - 組み込み: SQLite／DuckDB（メモリDB、ファイルDB）。通常の `cargo test` で実施する。
 - 外部: PostgreSQL・MySQL・SQL Server・Oracle・Db2。`docs/developer/database-live-tests.md` の既存デモComposeを使い、`--ignored` で実施する（レベルL）。
-- LinuxではOpenSSL 3が必要。ODBC（unixODBC・`libodbc.so.2`）は使用しない。ODBC接続文字列による接続とDb2の実測計画は制限として対象外。
+- LinuxではOpenSSL 3が必要。ODBC（unixODBC・`libodbc.so.2`）は使用しない。ODBC接続文字列による接続は制限として対象外。
 - `YYTE_CONFIG_DIR` を隔離して `databases.json` を作る。パスワードは環境変数か伏字入力で与える。
 
 ## UC-10-01 DB管理画面を開く

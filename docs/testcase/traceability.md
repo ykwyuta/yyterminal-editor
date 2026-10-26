@@ -72,7 +72,7 @@
 | DB Export CSV / DB Export TSV / DB Export delimited / DB Export Parquet / DB Export fixed | UC-10-10 |
 | DB Import CSV / DB Import TSV / DB Import delimited / DB Import Parquet / DB Import fixed | UC-10-11 |
 | DB Open plan | UC-11-01 |
-| DB Estimated plan / DB Actual plan | UC-11-02 |
+| DB Estimated plan / DB Actual plan / DB Db2 actual setup SQL | UC-11-02 |
 | DB Plan / DB Next operator / DB Previous operator / DB Next warning | UC-11-03、UC-11-07 |
 | DB Save plan | UC-11-05 |
 | DB Plan raw / DB Plan SVG | UC-11-06 |
@@ -126,6 +126,7 @@
 | `tests/cui.rs::sqlite_join_plan_connects_in_real_terminal` | UC-11-02、UC-11-04 |
 | `tests/markdown_viewer.rs`（4試験） | UC-09-03、UC-09-07、UC-09-09、UC-09-10 |
 | `tests/plan_scenarios.rs`（SQLite/DuckDB 2試験、外部5DBはignored） | UC-11-02〜UC-11-06 |
+| `tests/db2_actual_plan.rs`（ignored、yydbmanager検証用ComposeのDb2） | UC-11-02 |
 | `tests/database_live.rs`（外部5DB、ignored） | UC-10-03、UC-10-05〜UC-10-11、UC-12-01、UC-12-03 |
 | `src/*.rs` の単体試験（約100件） | 各ファイルの「単体」と記載した行 |
 

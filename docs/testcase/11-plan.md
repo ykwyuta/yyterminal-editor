@@ -32,7 +32,9 @@
 | TS-11-02-03 | 正常 | 外部5DBの15シナリオ（推定、Db2以外は実測も） | 同上 | L | A | `plan_scenarios`（ignored） |
 | TS-11-02-04 | 正常 | 試験用の表に対する更新SQLで `DB Actual plan` | 利用者文書どおり**SQLが実際に実行され**、更新が起きる。実行前に画面上の注意表示があるかを記録する | U | A | — |
 | TS-11-02-05 | 境界 | SQLiteで実測計画 | 対象外である旨を示し、成功扱いにしない | U | B | — |
-| TS-11-02-06 | 異常 | Db2接続で更新SQLに `DB Actual plan` | ODBCが必要な旨を表示し、**SQLを送信しない**（試験用表の内容が不変） | U/L | A | 単体 `odbc_profiles_and_db2_actual_plans_are_refused_without_running_sql` |
+| TS-11-02-06 | 異常 | 準備前（一時表スペース・`YYDBMANAGER_ACTIVITY` なし）のDb2で、試験用表の更新SQLに `DB Actual plan` | 準備不足のエラーを表示し、**SQLを実行しない**（試験用表の内容が不変） | L | A | `db2_actual_plan`（ignored） |
+| TS-11-02-07 | 正常 | `DB Db2 actual setup SQL` | 準備SQLを新しいSQLタブに表示し、**送信しない** | U | A | 単体 `odbc_profiles_are_refused_and_db2_setup_sql_is_only_shown` |
+| TS-11-02-08 | 正常 | 準備済みのDb2で集約SQLに `DB Actual plan` | 実測行数付きの計画を表示し、SVG・yyplan保存往復で情報が一致する | L | A | `db2_actual_plan`（ignored） |
 
 ## UC-11-03 計画図を読み、ノード・接続線の詳細を見る
 

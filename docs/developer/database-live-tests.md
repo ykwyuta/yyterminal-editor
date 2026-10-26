@@ -25,7 +25,7 @@ Windowsでは元の `verify.ps1 -Services postgres,mysql,sqlserver,oracle,db2` �
 - デモの5表結合に対する推定計画・実測計画、端末の演算子配置、SVG、yyplan保存・再読込。
 - 1200行のページングとページ境界をまたぐTSVコピー。
 
-Db2実測計画は、yydbmanagerの `native_live.rs` と同じく対象外です。既定Composeではactivity event monitorを構成しません。推定計画は検証し、未対応CLOB取得後にカーソルが閉じられ、その接続でDDLが継続できることも確認します。対象外を実測計画の成功とは扱いません。
+このシナリオでのDb2実測計画は、yydbmanagerの `native_live.rs` と同じく対象外です。共有デモのComposeにはactivity event monitorを追加しません。推定計画は検証し、未対応CLOB取得後にカーソルが閉じられ、その接続でDDLが継続できることも確認します。Db2実測計画は下記の専用試験で検証します。
 
 ## 成果物と終了
 
@@ -46,6 +46,18 @@ YYDBMANAGER_DEMO=/path/to/yyeditor/demo/yydbmanager \
 
 ComposeとSQLの修正、独自の初期データや実測収集モニターの追加は、この共通シナリオでは行いません。
 
+## Db2実測計画
+
+`tests/db2_actual_plan.rs` は、yydbmanagerの検証用Compose `apps/yydbmanager/tests/docker/compose.yml` の `db2` サービス（プロジェクト `yydbmanager-validation`、ポート15000、`YYTEST`）だけを使います。上流の `docker_live` と同じく、一時表スペース・EXPLAIN表・`YYDBMANAGER_ACTIVITY` が無ければ作成して起動します。共有デモのDb2には作成しません。
+
+```sh
+docker compose -p yydbmanager-validation -f ../yyeditor/apps/yydbmanager/tests/docker/compose.yml up -d db2
+# ログに "Setup has completed" が出てから実行する。
+YYDBMANAGER_VALIDATION=../yyeditor/apps/yydbmanager/tests/docker   cargo test --locked --test db2_actual_plan -- --ignored --nocapture
+```
+
+独自の表 `YYTE_ACTUAL_<プロセスID>` に200行を作ります。モニター作成前であれば、その表への `DELETE` の実測計画がエラーになり行数が変わらないことを確認します。その後、集約SQLの推定・実測計画を取得し、実測行数、端末カード数、SVG、yyplan保存往復を検証します。試験表は終了時に削除します。モニターは上流の検証と同じく残します。不要になったら `docker compose -p yydbmanager-validation -f ../yyeditor/apps/yydbmanager/tests/docker/compose.yml down` で停止してください。
+
 ## 15種類の実行計画シナリオ
 
 `demo/database/plan-scenarios.json`の15SQLを`tests/plan_scenarios.rs`で検証する。単表走査、主キー検索、2表結合、自己外部結合、3表結合、5表集約、HAVINGとソート、DISTINCT結合、EXISTS、NOT EXISTS、IN、相関スカラー副問い合わせ、集約派生表の外部結合、CTEとウィンドウ関数、UNION ALLを含む。
@@ -58,7 +70,7 @@ YYDBMANAGER_HOST=127.0.0.1 YYTE_PLAN_REPORTDIR=/new/report/directory \
   cargo test --locked --test plan_scenarios -- --include-ignored --nocapture --test-threads=1
 ```
 
-SQLiteのノード別実測とDb2のactivity monitorが必要な実測は対象外。推定105件、対応5DBの実測75件、計180計画を取得する。SQLite/DuckDBだけは専用メモリDBに小さな独立データを作る。その他はオリジナルデモのデータをSELECTする。
+SQLiteのノード別実測と、共有デモに無いactivity monitorが必要なDb2の実測は対象外（Db2実測は上記の専用試験）。推定105件、対応5DBの実測75件、計180計画を取得する。SQLite/DuckDBだけは専用メモリDBに小さな独立データを作る。その他はオリジナルデモのデータをSELECTする。
 
 元DBの計画と各表示カード・接続線を照合し、全接続線の各セル、ノード/接続線のクリック領域、小画面と画面外パン、SVG出力、yyplan保存往復を検証する。SQLiteは元ノードと既存親子関係の保持、MySQLの推定JSONは全select_idの表示も確認する。120秒以内にワーカー応答を待ち、失敗時に接続線の端末画面を出力する。接続を閉じ、ワーカーを回収する。
 
