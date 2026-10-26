@@ -1415,7 +1415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3644,7 +3644,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4140,6 +4140,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-db2-driver"
+version = "0.1.0"
+source = "git+https://github.com/ykwyuta/rust-db2-driver.git?rev=14999cd983a666b209f0446b398005b141bebb08#14999cd983a666b209f0446b398005b141bebb08"
+dependencies = [
+ "getrandom 0.3.4",
+ "rustls",
+ "webpki-roots",
+]
+
+[[package]]
 name = "rust_decimal"
 version = "1.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4194,7 +4204,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4919,7 +4929,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5979,7 +5989,7 @@ dependencies = [
 [[package]]
 name = "yy-buffer"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "memchr",
 ]
@@ -5987,7 +5997,7 @@ dependencies = [
 [[package]]
 name = "yy-cobol"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "yy-encoding",
 ]
@@ -5995,7 +6005,7 @@ dependencies = [
 [[package]]
 name = "yy-config"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "fs2",
  "serde",
@@ -6007,7 +6017,7 @@ dependencies = [
 [[package]]
 name = "yy-core"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "crossbeam-channel",
  "memchr",
@@ -6026,7 +6036,7 @@ dependencies = [
 [[package]]
 name = "yy-db-core"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "chrono",
  "csv",
@@ -6040,6 +6050,7 @@ dependencies = [
  "postgres-native-tls",
  "roxmltree 0.21.2",
  "rusqlite",
+ "rust-db2-driver",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -6049,6 +6060,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "unicode-width 0.2.0",
+ "webpki-roots",
  "yy-cobol",
  "yy-draw",
  "yy-sheet",
@@ -6057,7 +6069,7 @@ dependencies = [
 [[package]]
 name = "yy-delimited"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "memchr",
  "yy-buffer",
@@ -6066,7 +6078,7 @@ dependencies = [
 [[package]]
 name = "yy-draw"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -6093,7 +6105,7 @@ dependencies = [
 [[package]]
 name = "yy-formula"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "yy-numfmt",
 ]
@@ -6101,7 +6113,7 @@ dependencies = [
 [[package]]
 name = "yy-io"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "memmap2",
  "yy-buffer",
@@ -6111,7 +6123,7 @@ dependencies = [
 [[package]]
 name = "yy-jobs"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "crossbeam-channel",
 ]
@@ -6119,7 +6131,7 @@ dependencies = [
 [[package]]
 name = "yy-merge-core"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -6143,12 +6155,12 @@ dependencies = [
 [[package]]
 name = "yy-numfmt"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 
 [[package]]
 name = "yy-proto"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "miniz_oxide 0.9.1",
  "postcard",
@@ -6158,7 +6170,7 @@ dependencies = [
 [[package]]
 name = "yy-remote"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "crossbeam-channel",
  "data-encoding",
@@ -6173,7 +6185,7 @@ dependencies = [
 [[package]]
 name = "yy-search"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "regex-automata",
  "regex-syntax",
@@ -6183,7 +6195,7 @@ dependencies = [
 [[package]]
 name = "yy-sheet"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "memchr",
  "postcard",
@@ -6203,7 +6215,7 @@ dependencies = [
 [[package]]
 name = "yy-ssh"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "russh",
  "tokio",
@@ -6213,7 +6225,7 @@ dependencies = [
 [[package]]
 name = "yy-syntax"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "regex-automata",
  "serde",
@@ -6225,7 +6237,7 @@ dependencies = [
 [[package]]
 name = "yy-term"
 version = "0.1.0"
-source = "git+https://github.com/ykwyuta/yyeditor?rev=4d0434d95834adf9173f20ddaa22da56d3658063#4d0434d95834adf9173f20ddaa22da56d3658063"
+source = "git+https://github.com/ykwyuta/yyeditor?rev=5d2dbfc5859afab33791a67a2260907ee4712543#5d2dbfc5859afab33791a67a2260907ee4712543"
 dependencies = [
  "unicode-width 0.2.0",
 ]

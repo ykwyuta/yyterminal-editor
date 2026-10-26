@@ -23,28 +23,28 @@ pulldown-cmark = "0.13"
 tempfile = "3"
 unicode-width = "0.2"
 sha2 = "0.10"
-yy-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-buffer = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-io = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-term = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-jobs = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-config = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-delimited = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-cobol = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-sheet = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-formula = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
-yy-numfmt = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
+yy-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-buffer = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-io = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-term = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-jobs = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-config = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-delimited = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-cobol = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-sheet = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-formula = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
+yy-numfmt = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
 base64 = "0.22"
-yy-merge-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
+yy-merge-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
 
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
-yy-syntax = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
+yy-syntax = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }
 
-# ODBC is disabled: no driver manager (odbc32 / libodbc.so.2) is linked.
-yy-db-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063", default-features = false }
+# yy-db-core has no ODBC since this revision; no driver manager (odbc32 / libodbc.so.2) is linked.
+yy-db-core = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
-yy-draw = { git = "https://github.com/ykwyuta/yyeditor", rev = "4d0434d95834adf9173f20ddaa22da56d3658063" }
+yy-draw = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab33791a67a2260907ee4712543" }

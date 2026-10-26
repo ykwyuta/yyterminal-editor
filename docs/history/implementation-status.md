@@ -130,3 +130,9 @@
 - yydbmanager機能の移植、実行計画の表示例、描画性能改善、Markdown見出し全幅・コード背景、変更破棄によるタブ閉じをv0.7（パッケージ0.7.0）としてまとめる。
 - Windows 93件、Linux 109件の通常試験、fmt・Clippyが成功。5外部DBの実接続は別の検証記録を参照する。
 - Windows／Linuxのx86_64・ARM64の最新コミットのCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。
+
+## 2026-10-26 共有クレートのODBC依存解消
+
+- YYクレートを yyeditor `5d2dbfc5859afab33791a67a2260907ee4712543` に更新した。`yy-db-core` がODBCを廃止しDb2もRust直接接続（rust-db2-driver）になったため、Cargo.lockから `odbc-api` が外れた。
+- CIとドキュメントからunixODBCの導入・実行時要件を削除した。OpenSSL 3・cmake等は引き続き必要。
+- Windows x64でfmt・全ターゲットClippy・通常試験が成功。Linuxの通常試験・PTY実端末試験、外部DB実接続は未実施でCIで確認する。
