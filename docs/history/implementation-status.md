@@ -133,6 +133,5 @@
 
 ## 2026-10-26 共有クレートのODBC依存解消
 
-- YYクレートを yyeditor `5d2dbfc5859afab33791a67a2260907ee4712543` に更新した。`yy-db-core` がODBCを廃止しDb2もRust直接接続（rust-db2-driver）になったため、Cargo.lockから `odbc-api` が外れた。
-- CIとドキュメントからunixODBCの導入・実行時要件を削除した。OpenSSL 3・cmake等は引き続き必要。
-- Windows x64でfmt・全ターゲットClippy・通常試験が成功。Linuxの通常試験・PTY実端末試験、外部DB実接続は未実施でCIで確認する。
+- [ODBC依存の削除](remove-odbc-2026-10-26.md) で固定したyyeditorのブランチコミット `4d0434d` から、マージ後のyyeditor master `5d2dbfc5859afab33791a67a2260907ee4712543` へ全YYクレートを固定し直した。`yy-db-core` 自体が `odbc-api` を廃止し、Db2もRust直接接続（rust-db2-driver）になった。`default-features = false` とODBC形式の接続先・Db2実測計画の拒否、リンク検査は維持した。
+- Windows x64で通常99試験、Linux x64（unixODBC未導入）でPTY実端末16件を含む通常117試験、両OSでfmt・Clippy、外部5DB実接続と15計画シナリオが成功した。詳細は [ODBC廃止後の実接続検証](database-live-validation-2026-10-26.md)。
