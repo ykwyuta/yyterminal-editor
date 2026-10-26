@@ -136,3 +136,8 @@
 - [ODBC依存の削除](remove-odbc-2026-10-26.md) で固定したyyeditorのブランチコミット `4d0434d` から、マージ後のyyeditor master `5d2dbfc5859afab33791a67a2260907ee4712543` へ全YYクレートを固定し直した。`yy-db-core` 自体が `odbc-api` を廃止し、Db2もRust直接接続（rust-db2-driver）になった。`default-features = false` とODBC形式の接続先・Db2実測計画の拒否、リンク検査は維持した。
 - Windows x64で通常99試験、Linux x64（unixODBC未導入）でPTY実端末16件を含む通常117試験、両OSでfmt・Clippy、外部5DB実接続と15計画シナリオが成功した。詳細は [ODBC廃止後の実接続検証](database-live-validation-2026-10-26.md)。
 - 上流のDb2実測計画（Rust直接接続）を使うため事前拒否を削除し、`実行計画 > Db2実測収集の準備SQL`（表示のみ）を追加した。yydbmanager検証用ComposeのDb2で準備前の非実行と準備後の実測行数を両OSで確認した。
+
+## 2026-10-26 v0.8の公開準備
+
+- ODBC依存の削除、YYクレートのyyeditor master `5d2dbfc` への固定、Db2実測計画（Rust直接接続）と準備SQLの表示をv0.8（パッケージ0.8.0）としてまとめる。ODBC接続文字列の接続先は使用できなくなる互換性のない変更を含む。
+- 対象コミットのWindows／Linuxのx86_64・ARM64のCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。
