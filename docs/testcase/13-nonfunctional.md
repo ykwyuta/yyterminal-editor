@@ -89,8 +89,9 @@
 | ID | 分類 | 手順 | 期待結果 | レベル | 優先度 | 既存試験 |
 |---|---|---|---|---|---|---|
 | TS-13-09-01 | 正常 | CIのLinux/Windows × x86_64/ARM64 の4環境 | fmt・Clippy・テスト・releaseビルド・`--help`・markdownViewer plain・`release.py verify` が成功 | R | A | CI |
-| TS-13-09-02 | 正常 | Linuxの配布バイナリ | `libodbc.so.2`・OpenSSL 3があれば起動し、ないと分かるエラーになる | R/M | B | — |
+| TS-13-09-02 | 正常 | unixODBCを導入していないLinuxで配布バイナリを起動 | 起動し、SQLite・DuckDB・直接接続が使える。`readelf -d` のNEEDEDに `libodbc.so.2` がない。OpenSSL 3がない場合は分かるエラーになる | R/M | A | `tools/release.py verify` |
 | TS-13-09-03 | 正常 | Windowsではモデル試験、Linuxでは実PTY試験 | Linux専用試験をWindowsで0件にして代替しない | R | A | CI |
+| TS-13-09-04 | 正常 | Windowsの配布バイナリ | インポートに `odbc32.dll` がない | R | B | `tools/release.py verify` |
 
 ## UC-13-10 配布物を作る
 

@@ -31,7 +31,8 @@
 | TS-11-02-02 | 正常 | 15シナリオ×SQLite/DuckDBの推定、DuckDBの実測 | 全計画が取得でき、元DBのノード・接続と表示カード・接続線が一致 | U | A | `sqlite_fifteen_plans`、`duckdb_fifteen_plans` |
 | TS-11-02-03 | 正常 | 外部5DBの15シナリオ（推定、Db2以外は実測も） | 同上 | L | A | `plan_scenarios`（ignored） |
 | TS-11-02-04 | 正常 | 試験用の表に対する更新SQLで `DB Actual plan` | 利用者文書どおり**SQLが実際に実行され**、更新が起きる。実行前に画面上の注意表示があるかを記録する | U | A | — |
-| TS-11-02-05 | 境界 | SQLite・Db2で実測計画 | 対象外である旨を示し、成功扱いにしない | U/L | B | — |
+| TS-11-02-05 | 境界 | SQLiteで実測計画 | 対象外である旨を示し、成功扱いにしない | U | B | — |
+| TS-11-02-06 | 異常 | Db2接続で更新SQLに `DB Actual plan` | ODBCが必要な旨を表示し、**SQLを送信しない**（試験用表の内容が不変） | U/L | A | 単体 `odbc_profiles_and_db2_actual_plans_are_refused_without_running_sql` |
 
 ## UC-11-03 計画図を読み、ノード・接続線の詳細を見る
 

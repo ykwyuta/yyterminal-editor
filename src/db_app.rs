@@ -515,6 +515,17 @@ impl App {
                 }
                 "DB Disconnect" => self.db.as_mut().unwrap().send(Request::Disconnect),
                 "DB Execute" | "DB Estimated plan" | "DB Actual plan" => {
+                    let d = self.db.as_ref().unwrap();
+                    if name == "DB Actual plan"
+                        && d.profiles
+                            .iter()
+                            .any(|p| p.name == d.active && p.kind == DbKind::Db2)
+                    {
+                        return Err(
+                            "Db2 actual plans need ODBC, which yyte does not use; the SQL was not run"
+                                .into(),
+                        );
+                    }
                     self.tabs[self.tab].database = true;
                     let sql = self.db_sql()?;
                     self.db.as_mut().unwrap().send(if name == "DB Execute" {
@@ -2282,5 +2293,53 @@ mod tests {
                 .password
                 .is_empty()
         );
+    }
+    #[test]
+    fn odbc_profiles_and_db2_actual_plans_are_refused_without_running_sql() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_owned());
+        app.command("DB Manager");
+        idle(&mut app);
+        let odbc = db::Profile {
+            name: "legacy".into(),
+            kind: DbKind::PostgreSql,
+            target: "Driver={PostgreSQL Unicode};Server=127.0.0.1".into(),
+            read_only: false,
+            password_env: String::new(),
+        };
+        assert!(odbc.options(None).unwrap_err().contains("ODBC"));
+        let d = app.db.as_mut().unwrap();
+        let mut profiles = d.profiles.clone();
+        profiles.push(odbc);
+        assert!(db::save_profiles(&d.profile_path, &profiles).is_err());
+        assert!(!d.profile_path.exists());
+        let target = yy_db_core::native::Config {
+            host: "localhost".into(),
+            port: 25000,
+            database: "demo".into(),
+            username: "test".into(),
+            password: String::new(),
+            tls: "require".into(),
+            ca_file: None,
+            trust_server_certificate: false,
+        }
+        .encode()
+        .unwrap();
+        d.profiles.push(db::Profile {
+            name: "db2".into(),
+            kind: DbKind::Db2,
+            target,
+            read_only: false,
+            password_env: String::new(),
+        });
+        d.active = "db2".into();
+        app.tabs[app.tab].doc.insert_text("DELETE FROM t", false);
+        app.command("DB Actual plan");
+        assert!(
+            app.status.contains("Db2 actual plans need ODBC"),
+            "{}",
+            app.status
+        );
+        assert!(!app.db.as_ref().unwrap().busy);
     }
 }

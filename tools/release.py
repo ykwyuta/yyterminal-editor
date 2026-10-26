@@ -46,6 +46,70 @@ def verify_binary(path, operating_system, architecture):
             machine = 183 if architecture == "arm64" else 62
             if len(data) < 20 or data[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", data, 18)[0] != machine:
                 raise ValueError(f"Wrong ELF architecture ({architecture} expected): {path}")
+    # ODBC was removed on purpose; the driver manager must not return through a dependency.
+    for library in dynamic_libraries(path, operating_system):
+        if library.lower().startswith("libodbc.") or library.lower() == "odbc32.dll":
+            raise ValueError(f"Executable links the ODBC driver manager {library}: {path}")
+
+
+def c_string(data, offset):
+    return data[offset:data.index(b"\0", offset)].decode("ascii")
+
+
+def dynamic_libraries(path, operating_system):
+    """Return ELF DT_NEEDED or PE (delay-)import DLL names; embedded text is not a link."""
+    data = path.read_bytes()
+    if operating_system == "windows":
+        coff = struct.unpack_from("<I", data, 0x3c)[0] + 4
+        if len(data) < coff + 20:
+            return []
+        sections, optional_size = struct.unpack_from("<H", data, coff + 2)[0], struct.unpack_from("<H", data, coff + 16)[0]
+        optional = coff + 20
+        if optional_size < 112 or struct.unpack_from("<H", data, optional)[0] != 0x20b:
+            return []
+        directories = struct.unpack_from("<I", data, optional + 108)[0]
+        table = [struct.unpack_from("<5I", data, optional + optional_size + 40 * i + 8)[:4] for i in range(sections)]
+
+        def offset(rva):
+            for virtual_size, address, raw_size, raw in table:
+                if address <= rva < address + max(virtual_size, raw_size):
+                    return rva - address + raw
+            raise ValueError(f"PE address outside sections: {path}")
+
+        names = []
+        # Import directory entries are 20 bytes with the name at +12; delay-load entries are 32 bytes with the name at +4.
+        for index, size, name_at in ((1, 20, 12), (13, 32, 4)):
+            if index >= directories:
+                continue
+            rva = struct.unpack_from("<I", data, optional + 112 + 8 * index)[0]
+            if not rva:
+                continue
+            entry = offset(rva)
+            while any(data[entry:entry + size]):
+                names.append(c_string(data, offset(struct.unpack_from("<I", data, entry + name_at)[0])))
+                entry += size
+        return names
+    phoff, = struct.unpack_from("<Q", data, 0x20)
+    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+    headers = [struct.unpack_from("<IIQQQQ", data, phoff + phentsize * i) for i in range(phnum)]
+    loads = [(vaddr, size, offset) for kind, _, offset, vaddr, _, size in headers if kind == 1]
+
+    def file_offset(address):
+        for vaddr, size, offset in loads:
+            if vaddr <= address < vaddr + size:
+                return address - vaddr + offset
+        raise ValueError(f"ELF address outside loaded segments: {path}")
+
+    entries = []
+    for kind, _, offset, _, _, size in headers:
+        if kind == 2:
+            for position in range(offset, offset + size, 16):
+                tag, value = struct.unpack_from("<qQ", data, position)
+                if tag == 0:
+                    break
+                entries.append((tag, value))
+    strtab = next((value for tag, value in entries if tag == 5), None)
+    return [c_string(data, file_offset(strtab) + value) for tag, value in entries if tag == 1]
 
 
 def run_binary(path, *arguments):

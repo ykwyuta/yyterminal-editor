@@ -31,6 +31,7 @@ impl Profile {
         }
     }
     pub fn options(&self, password: Option<String>) -> Result<Options> {
+        direct_target(self.kind, &self.target)?;
         let mut target = self.target.clone();
         if let Some(mut config) = yy_db_core::native::Config::decode(&target)? {
             if let Some(password) = password {
@@ -52,6 +53,19 @@ impl Profile {
             connection_string: target,
             read_only: self.read_only,
         })
+    }
+}
+/// yyte does not link an ODBC driver manager, so external databases need yynative: targets.
+fn direct_target(kind: DbKind, target: &str) -> Result<()> {
+    if matches!(kind, DbKind::Sqlite | DbKind::DuckDb)
+        || yy_db_core::native::Config::decode(target)?.is_some()
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} uses an ODBC connection string, which yyte does not support; edit it as a direct connection",
+            kind.name()
+        ))
     }
 }
 pub fn load_profiles(path: &Path) -> Result<Vec<Profile>> {
@@ -87,10 +101,7 @@ pub fn save_profiles(path: &Path, profiles: &[Profile]) -> Result<()> {
         {
             return Err("Passwords are not saved: use a password environment variable or enter at connect time".into());
         }
-        let t = p.target.to_lowercase();
-        if !t.starts_with("yynative:") && (t.contains("pwd=") || t.contains("password=")) {
-            return Err("Do not store passwords in ODBC profiles".into());
-        }
+        direct_target(p.kind, &p.target)?;
     }
     let parent = path
         .parent()
