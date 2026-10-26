@@ -34,6 +34,6 @@ Markdownプレビューは128MiB・100万表示行へ対応し、表を行番号
 
 リリースビルドはWindows／Linuxのx86_64版とARM64版を用意します。CPUに合う `x86_64` または `arm64` の配布物を選んでください。Markdownプレビューは見出しレベル別の枠・下線、ブロック間の空行、階層別リスト記号・番号・チェックボックス、折り返しの字下げで読みやすく表示します。
 
-データベースメニューからSQLite・DuckDB・PostgreSQL・MySQL・SQL Server・Oracle・Db2を利用できます。結果は行番号・列見出し・罫線・選択・コピー・ページ取得を持つ閲覧専用グリッド、実行計画は元のノード配置・コスト・警告を用いた端末用の図として表示します。LinuxではunixODBCとOpenSSL 3が必要です。詳しくは[データベース機能のヘルプ](docs/user/database.md)を参照してください。
+データベースメニューからSQLite・DuckDB・PostgreSQL・MySQL・SQL Server・Oracle・Db2を利用できます。結果は行番号・列見出し・罫線・選択・コピー・ページ取得を持つ閲覧専用グリッド、実行計画は元のノード配置・コスト・警告を用いた端末用の図として表示します。LinuxではOpenSSL 3が必要です。ODBCのドライバーマネージャー（unixODBC）には依存しないため、ODBC接続文字列による接続とDb2の実測計画には対応しません。詳しくは[データベース機能のヘルプ](docs/user/database.md)を参照してください。
 
 - [実DBから取得した実行計画画面の出力例](docs/user/database-plan-examples.md)

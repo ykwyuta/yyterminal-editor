@@ -4,7 +4,7 @@
 
 - 組み込み: SQLite／DuckDB（メモリDB、ファイルDB）。通常の `cargo test` で実施する。
 - 外部: PostgreSQL・MySQL・SQL Server・Oracle・Db2。`docs/developer/database-live-tests.md` の既存デモComposeを使い、`--ignored` で実施する（レベルL）。
-- Linuxでは unixODBC（`libodbc.so.2`）と OpenSSL 3 が必要。
+- LinuxではOpenSSL 3が必要。ODBC（unixODBC・`libodbc.so.2`）は使用しない。ODBC接続文字列による接続とDb2の実測計画は制限として対象外。
 - `YYTE_CONFIG_DIR` を隔離して `databases.json` を作る。パスワードは環境変数か伏字入力で与える。
 
 ## UC-10-01 DB管理画面を開く
@@ -32,6 +32,8 @@
 | TS-10-02-06 | 異常 | 未知のDB種類、数値でないポート | 拒否し、保存しない | U | B | — |
 | TS-10-02-07 | 正常 | プロファイルの `yynative:` JSONに `ca_file`・`trust_server_certificate` | 指定が接続に使われる | L | C | — |
 | TS-10-02-08 | 異常 | 壊れた `databases.json` で起動 | エラーを表示し、既存ファイルを勝手に上書きしない | U | B | — |
+| TS-10-02-09 | 異常 | 外部DBの接続先に `yynative:` でないODBC接続文字列を指定して保存 | ODBC非対応のエラーで保存を拒否し、`databases.json` を変更しない | U | A | 単体 `odbc_profiles_and_db2_actual_plans_are_refused_without_running_sql` |
+| TS-10-02-10 | 異常 | YYdbmanager由来のODBC形式の接続先を手で `databases.json` に置いて接続 | ODBC非対応のエラーで接続しない。直接接続として編集し直せば接続できる | U | A | 同上 |
 
 ## UC-10-03 接続・切断する
 
