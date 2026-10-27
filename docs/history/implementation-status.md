@@ -141,3 +141,8 @@
 
 - ODBC依存の削除、YYクレートのyyeditor master `5d2dbfc` への固定、Db2実測計画（Rust直接接続）と準備SQLの表示をv0.8（パッケージ0.8.0）としてまとめる。ODBC接続文字列の接続先は使用できなくなる互換性のない変更を含む。
 - 対象コミットのWindows／Linuxのx86_64・ARM64のCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。
+
+## 2026-10-27 v0.8.2の公開準備
+
+- Linux版をmanylinux_2_28（glibc 2.28）でビルドし、OpenSSLを静的リンクした。v0.8・v0.8.1のLinux版がglibc 2.39未満で起動しなかった問題を解消する。詳細は [Linux版のglibc 2.28対応](linux-glibc-baseline-2026-10-27.md)。
+- 対象コミットのWindows／Linuxのx86_64・ARM64のCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。

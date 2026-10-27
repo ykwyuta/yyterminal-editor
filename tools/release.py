@@ -50,10 +50,70 @@ def verify_binary(path, operating_system, architecture):
     for library in dynamic_libraries(path, operating_system):
         if library.lower().startswith("libodbc.") or library.lower() == "odbc32.dll":
             raise ValueError(f"Executable links the ODBC driver manager {library}: {path}")
+        # OpenSSL is linked statically so distributions without libssl.so.3 can start yyte.
+        if operating_system == "linux" and library.startswith(("libssl.", "libcrypto.")):
+            raise ValueError(f"Executable links the system OpenSSL {library}: {path}")
+    if operating_system == "linux":
+        for name in elf_version_needs(path):
+            prefix, _, number = name.partition("_")
+            limit = LINUX_VERSION_LIMITS.get(prefix)
+            if limit and number.replace(".", "").isdigit() and tuple(map(int, number.split("."))) > limit:
+                raise ValueError(f"Executable needs {name}, newer than the glibc 2.28 baseline: {path}")
+
+
+# glibc 2.28 with the GCC 8 runtime of RHEL 8, Debian 10 and Ubuntu 20.04.
+LINUX_VERSION_LIMITS = {"GLIBC": (2, 28), "GLIBCXX": (3, 4, 25), "CXXABI": (1, 3, 11)}
 
 
 def c_string(data, offset):
     return data[offset:data.index(b"\0", offset)].decode("ascii")
+
+
+def elf_dynamic(data, path):
+    """Return the ELF dynamic entries and a function mapping virtual addresses to file offsets."""
+    phoff, = struct.unpack_from("<Q", data, 0x20)
+    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+    headers = [struct.unpack_from("<IIQQQQ", data, phoff + phentsize * i) for i in range(phnum)]
+    loads = [(vaddr, size, offset) for kind, _, offset, vaddr, _, size in headers if kind == 1]
+
+    def file_offset(address):
+        for vaddr, size, offset in loads:
+            if vaddr <= address < vaddr + size:
+                return address - vaddr + offset
+        raise ValueError(f"ELF address outside loaded segments: {path}")
+
+    entries = []
+    for kind, _, offset, _, _, size in headers:
+        if kind == 2:
+            for position in range(offset, offset + size, 16):
+                tag, value = struct.unpack_from("<qQ", data, position)
+                if tag == 0:
+                    break
+                entries.append((tag, value))
+    return entries, file_offset
+
+
+def elf_version_needs(path):
+    """Return versioned symbol requirements such as GLIBC_2.28 from DT_VERNEED."""
+    data = path.read_bytes()
+    if len(data) < 64:
+        return []
+    entries, file_offset = elf_dynamic(data, path)
+    tags = dict(entries)
+    if 0x6ffffffe not in tags:
+        return []
+    strings = file_offset(tags[5])
+    entry, names = file_offset(tags[0x6ffffffe]), []
+    # Elf64_Verneed: version, count, file, aux, next; Elf64_Vernaux: hash, flags, other, name, next.
+    for _ in range(tags.get(0x6fffffff, 0)):
+        _, count, _, aux, following = struct.unpack_from("<HHIII", data, entry)
+        auxiliary = entry + aux
+        for _ in range(count):
+            _, _, _, name, step = struct.unpack_from("<IHHII", data, auxiliary)
+            names.append(c_string(data, strings + name))
+            auxiliary += step
+        entry += following
+    return names
 
 
 def dynamic_libraries(path, operating_system):
@@ -89,25 +149,7 @@ def dynamic_libraries(path, operating_system):
                 names.append(c_string(data, offset(struct.unpack_from("<I", data, entry + name_at)[0])))
                 entry += size
         return names
-    phoff, = struct.unpack_from("<Q", data, 0x20)
-    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
-    headers = [struct.unpack_from("<IIQQQQ", data, phoff + phentsize * i) for i in range(phnum)]
-    loads = [(vaddr, size, offset) for kind, _, offset, vaddr, _, size in headers if kind == 1]
-
-    def file_offset(address):
-        for vaddr, size, offset in loads:
-            if vaddr <= address < vaddr + size:
-                return address - vaddr + offset
-        raise ValueError(f"ELF address outside loaded segments: {path}")
-
-    entries = []
-    for kind, _, offset, _, _, size in headers:
-        if kind == 2:
-            for position in range(offset, offset + size, 16):
-                tag, value = struct.unpack_from("<qQ", data, position)
-                if tag == 0:
-                    break
-                entries.append((tag, value))
+    entries, file_offset = elf_dynamic(data, path)
     strtab = next((value for tag, value in entries if tag == 5), None)
     return [c_string(data, file_offset(strtab) + value) for tag, value in entries if tag == 1]
 

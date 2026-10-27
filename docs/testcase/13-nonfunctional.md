@@ -89,9 +89,10 @@
 | ID | 分類 | 手順 | 期待結果 | レベル | 優先度 | 既存試験 |
 |---|---|---|---|---|---|---|
 | TS-13-09-01 | 正常 | CIのLinux/Windows × x86_64/ARM64 の4環境 | fmt・Clippy・テスト・releaseビルド・`--help`・markdownViewer plain・`release.py verify` が成功 | R | A | CI |
-| TS-13-09-02 | 正常 | unixODBCを導入していないLinuxで配布バイナリを起動 | 起動し、SQLite・DuckDB・直接接続が使える。`readelf -d` のNEEDEDに `libodbc.so.2` がない。OpenSSL 3がない場合は分かるエラーになる | R/M | A | `tools/release.py verify` |
+| TS-13-09-02 | 正常 | unixODBCを導入していないLinuxで配布バイナリを起動 | 起動し、SQLite・DuckDB・直接接続が使える。`readelf -d` のNEEDEDに `libodbc.so.2`・`libssl`・`libcrypto` がない | R/M | A | `tools/release.py verify` |
 | TS-13-09-03 | 正常 | Windowsではモデル試験、Linuxでは実PTY試験 | Linux専用試験をWindowsで0件にして代替しない | R | A | CI |
 | TS-13-09-04 | 正常 | Windowsの配布バイナリ | インポートに `odbc32.dll` がない | R | B | `tools/release.py verify` |
+| TS-13-09-05 | 正常 | glibc 2.28のLinux（AlmaLinux 8・Debian 10）とUbuntu 20.04で配布バイナリを起動し、TLS接続する | 起動し `--version`・`--help`・markdownViewerが動く。`GLIBC_2.28`・`GLIBCXX_3.4.25` を超える要求がない。TLSはOSのCA証明書で検証し、自己署名証明書を拒否する | R/M | A | `tools/release.py verify`、手動 |
 
 ## UC-13-10 配布物を作る
 

@@ -1,6 +1,6 @@
 [package]
 name = "yyterminal-editor"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
@@ -52,3 +52,7 @@ yy-draw = { git = "https://github.com/ykwyuta/yyeditor", rev = "5d2dbfc5859afab3
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
+
+# Linux release builds target glibc 2.28; link OpenSSL statically instead of requiring libssl.so.3.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

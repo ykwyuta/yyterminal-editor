@@ -120,7 +120,7 @@ CIの過去の失敗原因と対策は[CI失敗分析](../history/ci-failure-ana
 
 ## リリースのアーキテクチャ
 
-配布ツールはPython 3.11以上を使い、CIはPython 3.13を明示する。CIはLinux／Windowsのx86_64とARM64の4環境で、fmt・Clippy・テスト・releaseビルドと `tools/release.py verify` を実行する。ARM64はそれぞれ `ubuntu-24.04-arm` と `windows-11-arm` 上でネイティブ実行する。Rustホストはmatrixの完全ターゲット名で固定し、x64エミュレーションでビルドした資材をARM版として扱わない。実行ファイルのPE/ELF機械種別、バージョン、ヘルプ、Markdownの余白・表・画像・構文色も確認する。各CIの資材名にはOSと `X64`／`ARM64` を含める。
+配布ツールはPython 3.11以上を使い、CIはPython 3.13を明示する。CIはLinux／Windowsのx86_64とARM64の4環境で、fmt・Clippy・テスト・releaseビルドと `tools/release.py verify` を実行する。ARM64はそれぞれ `ubuntu-24.04-arm` と `windows-11-arm` 上でネイティブ実行する。Linuxの2ジョブは `quay.io/pypa/manylinux_2_28_x86_64`／`_aarch64` コンテナー（AlmaLinux 8、glibc 2.28、gcc-toolset）内でビルド・試験し、glibc 2.28以降で動く資材を作る。gcc-toolsetは新しいC++機能を実行ファイルへ取り込み、システムのlibstdc++（GCC 8相当）だけを参照する。`tools/release.py verify` はELFの `DT_VERNEED` を読み、`GLIBC_2.28`・`GLIBCXX_3.4.25`・`CXXABI_1.3.11` を超える要求と、`libssl`／`libcrypto` へのリンクがあれば失敗する。Rustホストはmatrixの完全ターゲット名で固定し、x64エミュレーションでビルドした資材をARM版として扱わない。実行ファイルのPE/ELF機械種別、バージョン、ヘルプ、Markdownの余白・表・画像・構文色も確認する。各CIの資材名にはOSと `X64`／`ARM64` を含める。
 
 GitHub上で対象SHAの4ジョブが成功した後、配布資材を取得して全アーキテクチャをまとめる。
 
@@ -144,7 +144,7 @@ WindowsはZIP、Linuxは実行権限付きtar.gz。ファイル名の `x86_64`�
 
 `db_app.rs` は接続ウィザード、オブジェクトツリー、SQLタブ、結果グリッド、プロパティ、ERとメニューを仲介する。`database_plan.rs` は元のdrawingの配置をセル座標へ変換し、元のlabels/details/flow_width/warningを使用する。画面内だけを描き、巨大なキャンバスを全セル展開しない。図の選択はデータ上のノードindexへ対応し、エッジのプロパティも区別する。ER文書のview情報は読み込み・再保存時に保持する。
 
-Linuxは `apt-get install libssl-dev pkg-config cmake` が必要。固定した `yy-db-core`（yyeditor `5d2dbfc`）はODBC（`odbc-api`）を含まず、Db2もRust直接接続（rust-db2-driver）を使う。既定機能が戻っても取り込まないよう `default-features = false` で参照する。このためWindowsの `odbc32`、Linuxの unixODBC へリンクしない。汎用ODBC接続文字列は使用できない。`database.rs` はODBC形式の接続先を保存・接続の両方で拒否する。Db2実測計画は `yy-db-core` の直接接続実装をそのまま使い、一時表スペースや `YYDBMANAGER_ACTIVITY` が無ければ対象SQLの実行前に失敗する。`DB Db2 actual setup SQL` は `yy_db_core::plan::DB2_ACTUAL_SETUP_SQL` を新しいSQLタブへ表示するだけで、送信しない。`tools/release.py verify` と梱包処理は、ELFの `DT_NEEDED` とPEのインポート表・遅延インポート表を読み、`libodbc.*`／`odbc32.dll` へのリンクがあれば失敗する。同梱文書の文字列はリンクとして扱わない。DuckDB 1.4.1の同梱C++ビルドのためCIは2ジョブを上限とし、初回ビルドの時間枠とキャッシュを分ける。Windows x64はVS 2022を維持する。ARM64は各ネイティブCIで検証する。
+LinuxではOpenSSLを `openssl` クレートの `vendored` 機能で静的リンクする。ビルドにはCコンパイラー、make、perl（`IPC::Cmd`、`Time::Piece`）が必要で、CIのコンテナーでは `perl-IPC-Cmd`・`perl-Time-Piece` を導入する。固定した `yy-db-core`（yyeditor `5d2dbfc`）はODBC（`odbc-api`）を含まず、Db2もRust直接接続（rust-db2-driver）を使う。既定機能が戻っても取り込まないよう `default-features = false` で参照する。このためWindowsの `odbc32`、Linuxの unixODBC へリンクしない。汎用ODBC接続文字列は使用できない。`database.rs` はODBC形式の接続先を保存・接続の両方で拒否する。Db2実測計画は `yy-db-core` の直接接続実装をそのまま使い、一時表スペースや `YYDBMANAGER_ACTIVITY` が無ければ対象SQLの実行前に失敗する。`DB Db2 actual setup SQL` は `yy_db_core::plan::DB2_ACTUAL_SETUP_SQL` を新しいSQLタブへ表示するだけで、送信しない。`tools/release.py verify` と梱包処理は、ELFの `DT_NEEDED` とPEのインポート表・遅延インポート表を読み、`libodbc.*`／`odbc32.dll` へのリンクがあれば失敗する。同梱文書の文字列はリンクとして扱わない。DuckDB 1.4.1の同梱C++ビルドのためCIは2ジョブを上限とし、初回ビルドの時間枠とキャッシュを分ける。Windows x64はVS 2022を維持する。ARM64は各ネイティブCIで検証する。
 
 Windowsのモデル／画面バッファ試験のほか、Linux実端末試験でSQLの結果・コピー・計画とサイズ変更を確認する。7種類の計画fixtureは `demo/database` に置く。直接接続の実サーバー試験とファイルだけの描画試験は区別する。
 

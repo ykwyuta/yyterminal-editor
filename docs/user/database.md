@@ -11,7 +11,7 @@
 - パスワード環境変数を空にした直接接続では、接続時に伏字のパスワード入力を表示します。パスワードを設定ファイルへ保存しません。TLSの既定値は `require` です。
 - 接続設定は `YYTE_CONFIG_DIR/databases.json`、未指定なら通常の利用者設定フォルダーに保存します。YYdbmanagerのWindows暗号化設定を直接読み込むものではありません。
 - 保存済み接続の編集・削除、接続先の選択、切断が可能です。接続を切り替えても、切断するまでは各接続のセッションを維持します。
-- ODBCは使用しません。WindowsのODBCドライバーマネージャー、LinuxのunixODBC（`libodbc.so.2`）、DB別のODBCドライバーはいずれも不要です。Linuxの配布バイナリはOpenSSL 3を利用します。
+- ODBCは使用しません。WindowsのODBCドライバーマネージャー、LinuxのunixODBC（`libodbc.so.2`）、DB別のODBCドライバーはいずれも不要です。Linuxの配布バイナリはOpenSSLを静的リンクしており、システムのOpenSSLは不要です。TLSの証明書検証にはOSのCA証明書（`ca-certificates` 等）を使います。CA証明書がない場合は、検証に失敗して接続しません。
 - **制限:** ODBC接続文字列（`Driver=...;Server=...` など）による接続には対応しません。外部DBは接続ウィザードが作る直接接続（`yynative:`）だけを使用します。YYdbmanager等で作成したODBC形式の接続先は、保存時に拒否し、接続時にもエラーとします。「接続先を編集」で直接接続として登録し直してください。
 - 詳細なCAファイル指定などはプロファイルの `yynative:` JSONの `ca_file`、`trust_server_certificate` に対応します。通常は証明書検証を有効にします。
 
