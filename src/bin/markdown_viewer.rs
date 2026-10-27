@@ -9,8 +9,11 @@ use std::{
     path::PathBuf,
     time::Duration,
 };
-use yyterminal_editor::preview::{self, Options, Rendered};
-fn print(rendered: &Rendered, color: bool) -> Result<()> {
+use yyterminal_editor::{
+    preview::{self, Options, Rendered},
+    terminal_color,
+};
+fn print(rendered: &Rendered, color: bool, depth: terminal_color::Depth) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     if !color {
@@ -40,12 +43,37 @@ fn print(rendered: &Rendered, color: bool) -> Result<()> {
             for (prefix, c) in [(38, style.fg), (48, style.bg)] {
                 if let Some(c) = c {
                     use ratatui::style::Color;
-                    match c {
+                    match terminal_color::adapt(c, depth) {
                         Color::Rgb(r, g, b) => write!(out, "\x1b[{prefix};2;{r};{g};{b}m")?,
-                        Color::Cyan => write!(out, "\x1b[36m")?,
-                        Color::Yellow => write!(out, "\x1b[33m")?,
-                        Color::Red => write!(out, "\x1b[31m")?,
-                        _ => {}
+                        Color::Indexed(i) => write!(out, "\x1b[{prefix};5;{i}m")?,
+                        Color::Reset => {}
+                        named => {
+                            // SGR 30-37 / 90-97 in palette order; backgrounds add 10.
+                            let index = [
+                                Color::Black,
+                                Color::Red,
+                                Color::Green,
+                                Color::Yellow,
+                                Color::Blue,
+                                Color::Magenta,
+                                Color::Cyan,
+                                Color::Gray,
+                                Color::DarkGray,
+                                Color::LightRed,
+                                Color::LightGreen,
+                                Color::LightYellow,
+                                Color::LightBlue,
+                                Color::LightMagenta,
+                                Color::LightCyan,
+                                Color::White,
+                            ]
+                            .iter()
+                            .position(|&n| n == named)
+                            .unwrap_or(7) as u8;
+                            let code = if index < 8 { 30 + index } else { 82 + index }
+                                + if prefix == 48 { 10 } else { 0 };
+                            write!(out, "\x1b[{code}m")?;
+                        }
                     }
                 }
             }
@@ -79,6 +107,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
     let mut dirty = true;
     let mut mouse_actions = vec![];
     let mut inputs = yyterminal_editor::input::Queue::default();
+    let depth = terminal_color::detect();
     loop {
         let width = terminal.size()?.width.clamp(1, preview::MAX_WIDTH);
         if width != last_width && !pending {
@@ -143,6 +172,7 @@ fn interactive(source: String, mut opts: Options) -> Result<()> {
                     )),
                     status,
                 );
+                terminal_color::adapt_buffer(f.buffer_mut(), depth);
             })?;
             dirty = false;
         }
@@ -287,6 +317,12 @@ fn main() -> Result<()> {
     if interactive_mode {
         interactive(source, opts)
     } else {
-        print(&preview::render(&source, &opts), opts.color)
+        // An explicit --color keeps truecolor; automatic color follows the terminal.
+        let depth = if color {
+            terminal_color::Depth::TrueColor
+        } else {
+            terminal_color::detect()
+        };
+        print(&preview::render(&source, &opts), opts.color, depth)
     }
 }

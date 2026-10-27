@@ -120,6 +120,7 @@
 | `tests/cui.rs::categorized_menus_tree_wrapping_open_modes_and_language_persist` | UC-01-06、UC-02-02〜UC-02-06 |
 | `tests/cui.rs::large_preview_end_navigation_and_spreadsheet_table_render_in_both_apps` | UC-09-01、UC-09-07、UC-09-10 |
 | `tests/cui.rs::editor_and_markdown_preview_highlight_languages_and_allow_manual_override` | UC-03-10、UC-09-09 |
+| `tests/cui.rs::markdown_code_stays_readable_without_truecolor` | UC-09-09、UC-13-05 |
 | `tests/cui.rs::preview_block_spacing_is_visible_in_editor_and_standalone_viewer` | UC-09-08 |
 | `tests/cui.rs::database_query_grid_plan_mouse_and_resize_use_real_terminal` | UC-10-03、UC-10-05、UC-10-08、UC-11-01、UC-11-03 |
 | `tests/cui.rs::database_management_menus_are_local_in_real_terminal` | UC-01-07、UC-02-09、UC-10-01 |

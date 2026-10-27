@@ -457,6 +457,13 @@ multiline state. Mermaid fences still become diagrams. No code is executed.
 --plain removes ANSI colors but preserves code text; --print --color emits
 syntax colors. Truecolor support depends on the terminal.
 
+Terminal colors: COLORTERM=truecolor/24bit or TERM ending in -direct uses
+24-bit color; TERM containing 256color uses the 256-color palette; other
+TERM values (linux, xterm, screen, unset) use the nearest of 16 colors.
+Windows without TERM uses 24-bit color. Text never takes the color of its
+own background. Set COLORTERM=truecolor when a truecolor terminal loses
+it over SSH. --print --color stays 24-bit.
+
 Editor analysis runs on a worker with a 256 KiB context and at most 256 KiB
 of visible source per request. Results are cached by document version,
 viewport and language. Unchanged scrolling reuses nearby lexical checkpoints;

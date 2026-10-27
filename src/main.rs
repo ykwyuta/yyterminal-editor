@@ -2570,6 +2570,7 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
     let mut initial = initial;
     let mut dirty = true;
     let mut inputs = yyterminal_editor::input::Queue::default();
+    let depth = yyterminal_editor::terminal_color::detect();
     while !app.quit {
         dirty |= app.poll();
         if !app.busy
@@ -2579,7 +2580,10 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
             dirty = true;
         }
         if dirty {
-            terminal.draw(|f| draw(f, &mut app))?;
+            terminal.draw(|f| {
+                draw(f, &mut app);
+                yyterminal_editor::terminal_color::adapt_buffer(f.buffer_mut(), depth);
+            })?;
             dirty = false;
         }
         if let Some((input, repeats)) = inputs.read(Duration::from_millis(8))? {

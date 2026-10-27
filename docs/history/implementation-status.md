@@ -146,3 +146,9 @@
 
 - Linux版をmanylinux_2_28（glibc 2.28）でビルドし、OpenSSLを静的リンクした。v0.8・v0.8.1のLinux版がglibc 2.39未満で起動しなかった問題を解消する。詳細は [Linux版のglibc 2.28対応](linux-glibc-baseline-2026-10-27.md)。
 - 対象コミットのWindows／Linuxのx86_64・ARM64のCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。
+
+## 2026-10-27 Truecolor非対応端末のコード表示
+
+- Markdownのコード背景（24ビット色 `30,36,46`）が、Truecolor非対応の端末で水色の文字・背景と解釈され読めなかった。`src/terminal_color.rs` で端末の色数を判断し、256色・16色へ置き換えるようにした。文字色と背景色が置き換え後に一致するセルは白／黒にする。
+- 実PTYで `TERM=xterm-256color`（`COLORTERM` なし）と `TERM=linux` の表示を確認する試験を追加した。既存のPTY試験は `COLORTERM=truecolor` を明示する。
+- v0.8.3（パッケージ0.8.3）としてまとめる。対象コミットのWindows／Linuxのx86_64・ARM64のCI成功を確認し、同じ実行のreleaseバイナリを4種類の配布物にする。公開の成否とURLはGitHubリリースを正とする。

@@ -95,6 +95,15 @@ impl Harness {
         Self::with_exe(path, env!("CARGO_BIN_EXE_yyte"))
     }
     fn with_exe(path: &std::path::Path, exe: &str) -> Result<Self> {
+        Self::with_terminal(path, exe, "xterm-256color", Some("truecolor"))
+    }
+    /// Starts exe under TERM and COLORTERM (None removes an inherited COLORTERM).
+    fn with_terminal(
+        path: &std::path::Path,
+        exe: &str,
+        term: &str,
+        colorterm: Option<&str>,
+    ) -> Result<Self> {
         let pair = portable_pty::native_pty_system().openpty(PtySize {
             cols: 100,
             rows: 30,
@@ -104,7 +113,11 @@ impl Harness {
         let mut command = CommandBuilder::new(exe);
         command.arg(path);
         command.cwd(path.parent().unwrap());
-        command.env("TERM", "xterm-256color");
+        command.env("TERM", term);
+        match colorterm {
+            Some(value) => command.env("COLORTERM", value),
+            None => command.env_remove("COLORTERM"),
+        }
         command.env("SHELL", "/bin/sh");
         command.env(
             "YYTE_CONFIG_DIR",
@@ -337,6 +350,9 @@ impl Harness {
     }
     fn finish(&mut self) -> Result<()> {
         self.send(b"\x11")?;
+        self.wait_exit()
+    }
+    fn wait_exit(&mut self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(status) = self.child.try_wait()? {
@@ -916,6 +932,51 @@ fn editor_and_markdown_preview_highlight_languages_and_allow_manual_override() -
         {
             viewer.screen.feed(&bytes);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn markdown_code_stays_readable_without_truecolor() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("code.md");
+    std::fs::write(
+        &path,
+        "Inline `inline_code` here.\n\n```\nplain_block_code\n```\n\n```rust\nlet value = 1;\n```\n",
+    )?;
+    let cell_at = |screen: &yy_term::Terminal, needle: &str| {
+        (0..screen.rows()).find_map(|y| {
+            let row = screen.screen_row(y);
+            let text = row.text();
+            text.find(needle).and_then(|at| {
+                let x = unicode_width::UnicodeWidthStr::width(&text[..at]);
+                row.cells.get(x).map(|c| (c.attr.fg, c.attr.bg))
+            })
+        })
+    };
+    let no_rgb = |screen: &yy_term::Terminal| {
+        (0..screen.rows()).all(|y| {
+            screen.screen_row(y).cells.iter().all(|c| {
+                !matches!(c.attr.fg, yy_term::Color::Rgb(..))
+                    && !matches!(c.attr.bg, yy_term::Color::Rgb(..))
+            })
+        })
+    };
+    // 256 colors: the code background is palette gray 235 instead of 48;2;30;36;46.
+    // 16 colors (Linux console): it is black.
+    for (term, background) in [("xterm-256color", 235), ("linux", 0)] {
+        let mut viewer =
+            Harness::with_terminal(&path, env!("CARGO_BIN_EXE_markdownViewer"), term, None)?;
+        viewer.wait("Ready")?;
+        for needle in ["inline_code", "plain_block_code", "let value"] {
+            viewer.wait_for(&format!("{term} {needle} on palette background"), |s| {
+                cell_at(s, needle)
+                    .is_some_and(|(fg, bg)| bg == yy_term::Color::Indexed(background) && fg != bg)
+                    && no_rgb(s)
+            })?;
+        }
+        viewer.send(b"q")?;
+        viewer.wait_exit()?;
     }
     Ok(())
 }

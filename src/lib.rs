@@ -13,3 +13,5 @@ pub mod database_plan;
 pub mod input;
 
 pub mod render_cache;
+
+pub mod terminal_color;
