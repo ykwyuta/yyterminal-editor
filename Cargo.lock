@@ -6255,7 +6255,7 @@ dependencies = [
 
 [[package]]
 name = "yyterminal-editor"
-version = "0.8.3"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
