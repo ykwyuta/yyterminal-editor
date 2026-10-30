@@ -83,6 +83,44 @@ fn long_paste_saves_all_lines_with_and_without_bracketed_paste() -> Result<()> {
 }
 
 #[test]
+fn save_prompt_suggests_json_and_accepts_an_exact_user_path() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("seed.txt");
+    std::fs::write(&path, "seed")?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Opened")?;
+    app.command("New file")?;
+    app.wait("[Untitled]")?;
+    let content = "{\"title\":\"日本語😀\"}";
+    app.send(format!("\x1b[200~{content}\x1b[201~\x13").as_bytes())?;
+    app.wait("Save as path")?;
+    app.wait("Untitled.json")?;
+    app.send(b"\r")?;
+    app.wait("Saved")?;
+    ensure!(
+        std::fs::read(dir.path().join("Untitled.json"))? == content.as_bytes(),
+        "Suggested save changed bytes; screen: {}",
+        app.screen.screen_text()
+    );
+    app.command("Save as")?;
+    app.wait("Save as path")?;
+    app.send(b"\x15chosen.name\r")?;
+    app.wait_for("explicit save name", |s| {
+        s.screen_text().contains("[chosen.name]") && s.screen_text().contains("Saved")
+    })?;
+    ensure!(
+        std::fs::read(dir.path().join("chosen.name"))? == content.as_bytes(),
+        "Explicit save changed bytes; screen: {}",
+        app.screen.screen_text()
+    );
+    ensure!(
+        !dir.path().join("chosen.name.json").exists(),
+        "Unexpected extension appended"
+    );
+    app.finish()
+}
+
+#[test]
 fn outline_json_hierarchy_references_undo_export_and_save_in_real_terminal() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("notes.yyoutline");
@@ -570,7 +608,7 @@ fn interactive_workbook_sizes_formulas_save_and_yymerge_diff() -> Result<()> {
     })?;
     app.command("Save as")?;
     app.wait("Save as path")?;
-    app.send(b"book.yys\r")?;
+    app.send(b"\x15book.yys\r")?;
     app.wait_for("workbook saved", |s| {
         let t = s.screen_text();
         t.contains("book.yys]")
@@ -756,7 +794,7 @@ fn mouse_confirms_save_as_and_viewer_buttons_work() -> Result<()> {
     app.wait("Opened")?;
     app.command("Save as")?;
     app.wait("Save as path")?;
-    app.send(b"copy.md")?;
+    app.send(b"\x15copy.md")?;
     app.wait("copy.md")?;
     app.click_text("[OK]")?;
     app.wait_for("mouse save confirmed", |s| {

@@ -1593,6 +1593,40 @@ impl App {
         self.outline_prompt = None;
         self.prompt = Some(prompt);
         self.input.clear();
+        if matches!(prompt, Prompt::Save) {
+            let editor = &self.tabs[self.tab];
+            let mode = if self.view == View::Outline {
+                Some("outline")
+            } else if editor.spreadsheet {
+                Some("yys")
+            } else if editor.raw {
+                Some("bin")
+            } else if self.view == View::Preview || self.view == View::Editor && self.preview_side {
+                Some("md")
+            } else if self.view == View::Table {
+                editor.table.as_ref().and_then(|grid| match &grid.mode {
+                    data::Mode::Delimited(d) if d.delimiter() == b"," => Some("csv"),
+                    data::Mode::Delimited(d) if d.delimiter() == b"\t" => Some("tsv"),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            let snapshot = editor.doc.snapshot();
+            let head = snapshot.read(
+                0..snapshot
+                    .len()
+                    .min(yyterminal_editor::save_name::SAMPLE_BYTES),
+            );
+            self.input = yyterminal_editor::save_name::suggest(
+                editor.path.as_deref(),
+                mode,
+                editor.syntax_language.as_deref(),
+                &head,
+            )
+            .to_string_lossy()
+            .into_owned();
+        }
     }
     fn command(&mut self, name: &str) {
         if self.outline_command(name) {
@@ -2893,6 +2927,51 @@ mod tests {
             std::thread::yield_now();
         }
     }
+    #[test]
+    fn save_suggestions_follow_view_and_leave_explicit_paths_and_bytes_alone() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut app = App::new(dir.path().to_owned());
+        wait(&mut app);
+        app.tabs[0].doc = yy_core::Document::from_text("{\"title\":\"日本語😀\"}");
+        app.command("Save");
+        assert_eq!(app.input, "Untitled.json");
+        app.prompt = None;
+        app.tabs[0].syntax_language = Some("python".into());
+        app.command("Save as");
+        assert_eq!(app.input, "Untitled.py");
+        app.view = View::Preview;
+        app.command("Save as");
+        assert_eq!(app.input, "Untitled.md");
+        app.view = View::Outline;
+        app.command("Save as");
+        assert_eq!(app.input, "Untitled.json");
+        app.view = View::Table;
+        app.tabs[0].table = Some(data::Grid::new(data::Mode::Delimited(
+            yy_delimited::Dialect::new(b"\t", Some(b'"')).unwrap(),
+        )));
+        app.command("Save as");
+        assert_eq!(app.input, "Untitled.tsv");
+        app.view = View::Editor;
+        app.input = "chosen".into();
+        app.prompt = None;
+        app.submit(Prompt::Save);
+        wait(&mut app);
+        assert_eq!(
+            std::fs::read(dir.path().join("chosen"))?,
+            "{\"title\":\"日本語😀\"}".as_bytes()
+        );
+        assert!(!dir.path().join("chosen.json").exists());
+        app.tabs[0].doc.insert_text(" ", false);
+        app.command("Save");
+        assert!(app.prompt.is_none());
+        wait(&mut app);
+        assert_eq!(
+            app.tabs[0].path.as_deref(),
+            Some(dir.path().join("chosen").canonicalize()?.as_path())
+        );
+        Ok(())
+    }
+
     #[test]
     fn save_refuses_external_change_and_preserves_unsaved_edits() -> Result<()> {
         let dir = tempfile::tempdir()?;

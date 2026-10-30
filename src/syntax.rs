@@ -12,7 +12,7 @@ use yy_syntax::{LineState, Registry, Syntax};
 
 pub const CONTEXT_BYTES: u64 = 256 * 1024;
 pub const VIEW_BYTES: u64 = 256 * 1024;
-fn registry() -> &'static Registry {
+pub(crate) fn registry() -> &'static Registry {
     static REGISTRY: OnceLock<Registry> = OnceLock::new();
     REGISTRY.get_or_init(Registry::builtin)
 }

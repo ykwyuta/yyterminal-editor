@@ -49,6 +49,16 @@ Rendering reads bounded visible rows; long lines wrap. Auto-detected YY
 encodings and original invalid bytes are preserved by the shared model.
 Loading and saving run off the UI thread.
 
+New-document Save and Save as prefill a suggested path. For new or extensionless
+documents, the active view, manual syntax language, then the first 64 KiB choose
+an extension (JSON/JSONL, Markdown, HTML/XML/SVG, CSV/TSV, config and common source
+formats; otherwise .txt). Outline suggests .json, raw bytes .bin and workbooks
+.yys. Existing extensions, Makefile/Dockerfile and dotfiles keep their names;
+Outline Save as replaces the extension with .json. Ctrl+U or Ctrl+A clears the
+path field so you can enter any name. Your entered path is used exactly, without
+appending an extension or converting content. Ctrl+S on an existing file always
+uses its original path.
+
 Encoding: yyte --encoding IBM-930/fixed:80 FILE
 Use yyte --list-encodings to list shared YY encodings. The Open encoding
 menu sets the encoding for the next Open file (auto restores detection).

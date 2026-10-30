@@ -5,6 +5,7 @@ pub mod preview;
 mod preview_layout;
 mod preview_table;
 
+pub mod save_name;
 pub mod syntax;
 
 pub mod database;
