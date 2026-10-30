@@ -183,6 +183,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
     let title = match app.view {
+        View::Outline => "Outline",
         View::Editor => "Editor",
         View::Table => "Table",
         View::Sheet => "Workbook",
@@ -199,6 +200,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(border, right);
     if inner.width > 0 && inner.height > 0 {
         match app.view {
+            View::Outline => crate::outline::draw(frame, app, inner),
             View::Database => crate::db_app::draw(frame, app, inner),
             View::Diff => draw_diff(frame, app, inner),
             View::Sheet => draw_book(frame, app, inner),
@@ -375,6 +377,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
             }
         } else {
             let title = match app.prompt {
+                Some(Prompt::OutlineEdit) => "Outline item text (Ctrl+U clears)",
+                Some(Prompt::OutlineRef) => "Reference target ID",
+                Some(Prompt::OutlineUnref) => "Remove reference target ID",
+                Some(Prompt::OutlineExport) => "New Markdown export path",
+                Some(Prompt::OutlineDelete) => "Delete selected branch? Type yes",
+                Some(Prompt::OutlineJump(true)) => "Backlink item ID (Enter: first candidate)",
+                Some(Prompt::OutlineJump(false)) => "Reference item ID (Enter: first candidate)",
                 Some(Prompt::Database(kind)) => kind.title(),
                 Some(Prompt::Open) => "Open path",
                 Some(Prompt::Save) => "Save as path (new file)",

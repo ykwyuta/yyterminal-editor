@@ -82,6 +82,72 @@ fn long_paste_saves_all_lines_with_and_without_bracketed_paste() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn outline_json_hierarchy_references_undo_export_and_save_in_real_terminal() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("notes.yyoutline");
+    std::fs::write(&path, include_str!("../demo/outline-notes.yyoutline"))?;
+    let mut app = Harness::new(&path)?;
+    app.wait("Outline ready")?;
+    app.wait("Outline notebook")?;
+    app.send(b"\x1b[B")?;
+    app.wait("ID: idea")?;
+    app.send(b"\x1b[1;3B\x02")?; // move branch down, bookmark
+    app.send(b"\x1bOQ")?; // F2 edits the selected item, not the JSON source
+    app.wait("Outline item text")?;
+    app.send("\x15\x1b[200~考えたこと\x1b[201~\r".as_bytes())?;
+    app.wait("考えたこと")?;
+    app.command("Outline reference")?;
+    app.wait("Reference target ID")?;
+    app.send(b"tasks\r\x13")?;
+    app.wait("Saved")?;
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let nodes = value["nodes"].as_array().unwrap();
+    ensure!(
+        nodes
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect::<Vec<_>>()
+            == ["root", "tasks", "idea", "detail"],
+        "Branch order differs: {}; screen: {}",
+        value,
+        app.screen.screen_text()
+    );
+    ensure!(
+        nodes[2]["text"] == "考えたこと"
+            && nodes[2]["bookmark"] == true
+            && nodes[2]["refs"][0] == "tasks"
+            && nodes[2]["colorHint"] == "blue"
+            && value["extensions"]["example"] == true,
+        "JSON metadata differs: {value}; screen: {}",
+        app.screen.screen_text()
+    );
+    app.send(b"\x1a\x19")?; // undo and redo reference edit
+    app.command("Outline export")?;
+    app.wait("New Markdown export path")?;
+    app.send(b"notes.md\r")?;
+    app.wait("Outline Markdown exported")?;
+    let markdown = std::fs::read_to_string(dir.path().join("notes.md"))?;
+    ensure!(
+        markdown.contains("## 考えたこと") && markdown.contains("### Detail"),
+        "Markdown differs: {markdown}; screen: {}",
+        app.screen.screen_text()
+    );
+    app.command("Outline source")?;
+    app.wait_for("outline source editor", |s| {
+        s.screen_text().contains("┌Editor")
+    })?;
+    app.command("Outline editor")?;
+    app.wait("Outline ready")?;
+    app.send(b"\x13")?;
+    app.wait("Saved")?;
+    app.finish()?;
+    let mut reopened = Harness::new(&path)?;
+    reopened.wait("Outline ready")?;
+    reopened.wait("考えたこと")?;
+    reopened.finish()
+}
+
 struct Harness {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,

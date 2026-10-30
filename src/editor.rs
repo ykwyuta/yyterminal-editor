@@ -15,6 +15,7 @@ struct RowCache {
     rows: Vec<(u64, u64, String)>,
 }
 pub struct Editor {
+    pub outline: crate::outline::State,
     pub doc: Document,
     row_cache: std::cell::RefCell<RowCache>,
     pub syntax: yyterminal_editor::syntax::EditorHighlighter,
@@ -53,6 +54,7 @@ impl Editor {
     pub fn empty() -> Self {
         let doc = Document::new_empty();
         Self {
+            outline: Default::default(),
             row_cache: Default::default(),
             syntax: Default::default(),
             syntax_language: None,
@@ -117,6 +119,7 @@ impl Editor {
             bail!("{error}");
         }
         Ok(Self {
+            outline: Default::default(),
             row_cache: Default::default(),
             syntax: Default::default(),
             syntax_language: None,

@@ -20,6 +20,7 @@ Rust 1.99.0、UTF-8端末、Git、シェルが必要です。上部メニュー�
 - [単独Markdownビューアー・画像・Mermaid](docs/user/markdown-viewer.md) — `markdownViewer FILE.md`
 - [データベース管理・SQL・実行計画・検索結果・ER](docs/user/database.md) — YYdbmanagerの共有エンジンを使用
 - [利用者向け操作説明](docs/user/help.md) — 同梱ヘルプの原稿
+- [yyeditor互換のアウトライン編集](docs/user/outline.md) — 同じ`.yyoutline` JSONを読み書き
 - [ビルド・内部構成・検証](docs/developer/README.md)
 - [企画案](docs/proposal/2026-10-25-yyterminal-editor.md)
 - [実装状況](docs/history/implementation-status.md)

@@ -2,7 +2,7 @@ yyterminal-editor / yyte — Initial developer preview
 
 F1           All commands (arrows, Enter; Esc closes)
 F10          File menu (Database menu in Database Management; Left/Right switch groups)
-F2           Editor
+F2           Editor (Outline: edit selected item text)
 F3           Git status
 F4           Integrated shell
 F5           Markdown preview
@@ -19,6 +19,14 @@ Ctrl+A       Select all
 Shift+arrows Extend selection
 Ctrl+Home/End Document start / end
 Ctrl+Q       Quit; modified tabs require typing discard
+
+Outline: .yyoutline files open in the compatible hierarchical editor.
+Enter adds an item; F2 edits text; Tab / Shift+Tab changes branch depth;
+Alt+Up/Down moves a branch; Space folds; Right zooms; Left goes to parent;
+Esc shows all; Ctrl+B toggles bookmark; Ctrl+R adds a reference by item ID.
+The Outline menu provides references/backlinks/bookmarks navigation,
+branch deletion, bullet/numbered style, URL opening, Markdown export,
+and the original JSON source view. Save / Undo / Redo share the text document.
 
 The menu also provides Save as, Git diff/staged diff, stage all,
 unstage all, commit staged changes, Help, and Markdown preview.

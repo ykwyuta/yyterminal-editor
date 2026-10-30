@@ -1,0 +1,12 @@
+{
+  "format": "yyoutline",
+  "version": 1,
+  "listStyle": "bullets",
+  "nodes": [
+    {"id":"root","depth":0,"text":"Outline notebook","bookmark":true,"collapsed":false,"refs":[]},
+    {"id":"idea","depth":1,"text":"Idea","bookmark":false,"collapsed":false,"refs":[],"colorHint":"blue"},
+    {"id":"detail","depth":2,"text":"Detail https://example.com/notes","bookmark":false,"collapsed":false,"refs":[]},
+    {"id":"tasks","depth":1,"text":"Tasks","bookmark":true,"collapsed":false,"refs":["idea"]}
+  ],
+  "extensions": {"example": true}
+}

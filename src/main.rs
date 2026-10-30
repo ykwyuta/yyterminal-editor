@@ -5,6 +5,7 @@ mod editor;
 mod fixed_export;
 mod git;
 mod layouts;
+mod outline;
 mod shell;
 mod ui;
 mod workbook;
@@ -31,6 +32,7 @@ use yyterminal_editor::commands::{
 };
 #[derive(Clone, Copy, PartialEq)]
 enum View {
+    Outline,
     Editor,
     Table,
     Sheet,
@@ -69,6 +71,12 @@ enum Message {
 }
 #[derive(Clone, Copy)]
 enum Prompt {
+    OutlineEdit,
+    OutlineRef,
+    OutlineUnref,
+    OutlineExport,
+    OutlineDelete,
+    OutlineJump(bool),
     Open,
     Save,
     Find,
@@ -99,6 +107,7 @@ enum Prompt {
 }
 #[derive(Clone, Copy)]
 enum MouseAction {
+    Outline(usize, &'static str),
     Run(&'static str),
     Database(db_app::Hit),
     Tab(usize),
@@ -141,6 +150,7 @@ impl ResizeDrag {
     }
 }
 struct App {
+    outline_prompt: Option<(usize, yy_core::Version, Option<String>)>,
     db: Option<db_app::State>,
     root: PathBuf,
     roots: Vec<PathBuf>,
@@ -200,6 +210,7 @@ impl App {
     fn new(root: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         let mut app = Self {
+            outline_prompt: None,
             db: None,
             roots: vec![root.clone()],
             encoding: None,
@@ -433,7 +444,13 @@ impl App {
             View::Terminal
         } else {
             self.last_document = tab;
-            if self.tabs[tab].database {
+            if self.tabs[tab].outline.active
+                && !self.tabs[tab].raw
+                && !self.tabs[tab].spreadsheet
+                && !self.tabs[tab].database
+            {
+                View::Outline
+            } else if self.tabs[tab].database {
                 View::Database
             } else if self.tabs[tab].spreadsheet {
                 View::Sheet
@@ -796,6 +813,9 @@ impl App {
                     self.view = View::Editor;
                     self.explorer = false;
                     self.status = "Opened".into();
+                    if self.pending_mode.is_none() && self.tabs[self.tab].path.as_ref().and_then(|p|p.extension()).is_some_and(|ext|ext=="yyoutline") {
+                        self.outline_command("Outline editor");
+                    }
                     match self.pending_mode.take() {
                         Some("Open as CSV") => self.table_mode(yy_delimited::Dialect::csv()),
                         Some("Open as TSV") => self.table_mode(yy_delimited::Dialect::tsv()),
@@ -1216,6 +1236,10 @@ impl App {
                     self.command(name);
                     return;
                 }
+                Some(MouseAction::Outline(index, op)) => {
+                    outline::select(self, index, op);
+                    return;
+                }
                 Some(MouseAction::Tab(i)) => {
                     self.select_tab(i);
                     return;
@@ -1317,6 +1341,14 @@ impl App {
             let up = event.kind == Kind::ScrollUp;
             if self.content_area.contains(point) {
                 match self.view {
+                    View::Outline => {
+                        for _ in 0..wheel_rows.min(192) {
+                            self.outline_key(KeyEvent::new(
+                                if up { K::Up } else { K::Down },
+                                M::NONE,
+                            ));
+                        }
+                    }
                     View::Editor | View::Database => {
                         self.tabs[self.tab].scroll_rows(
                             !up,
@@ -1558,10 +1590,14 @@ impl App {
         );
     }
     fn ask(&mut self, prompt: Prompt) {
+        self.outline_prompt = None;
         self.prompt = Some(prompt);
         self.input.clear();
     }
     fn command(&mut self, name: &str) {
+        if self.outline_command(name) {
+            return;
+        }
         if self.db_command(name) {
             return;
         }
@@ -1795,7 +1831,9 @@ impl App {
                         _ => 'a',
                     };
                     self.preview_focus = false;
-                    self.view = if self.tabs[self.tab].spreadsheet {
+                    self.view = if self.view == View::Outline {
+                        View::Outline
+                    } else if self.tabs[self.tab].spreadsheet {
                         View::Sheet
                     } else if self.tabs[self.tab].raw {
                         View::Table
@@ -1833,6 +1871,16 @@ impl App {
     fn submit(&mut self, prompt: Prompt) {
         let input = std::mem::take(&mut self.input);
         match prompt {
+            Prompt::OutlineEdit
+            | Prompt::OutlineRef
+            | Prompt::OutlineUnref
+            | Prompt::OutlineExport
+            | Prompt::OutlineDelete
+            | Prompt::OutlineJump(_) => {
+                if let Err(e) = self.outline_prompt_submit(prompt, input) {
+                    self.status = format!("{e:#}");
+                }
+            }
             Prompt::Database(kind) => self.db_submit(kind, input),
             Prompt::LayoutOpen => {
                 if self.busy {
@@ -2141,6 +2189,10 @@ impl App {
         if self.db_key(key) {
             return;
         }
+        if self.view == View::Outline && !self.explorer && key.code == K::F(2) {
+            self.outline_key(key);
+            return;
+        }
         match key.code {
             K::F(10) => {
                 self.show_menu(if self.view == View::Database {
@@ -2284,6 +2336,10 @@ impl App {
                 self.command(c);
                 return;
             }
+        }
+        if self.view == View::Outline && !self.explorer {
+            self.outline_key(key);
+            return;
         }
         if self.view == View::Editor && self.preview_side && self.preview_focus && !self.explorer {
             match key.code {
@@ -2624,6 +2680,10 @@ fn run(mut app: App, initial: Option<PathBuf>) -> Result<()> {
                         // Pasting into a command menu must not edit the document beneath it.
                     } else if app.prompt.is_some() {
                         app.input.push_str(&text);
+                    } else if app.view == View::Outline && !app.explorer {
+                        if let Err(error) = app.outline_submit(Prompt::OutlineEdit, text) {
+                            app.status = format!("{error:#}");
+                        }
                     } else if app.view == View::Terminal {
                         if let Some(shell) = &mut app.tabs[app.tab].terminal {
                             let bytes = yy_term::keys::paste(&text, shell.screen.modes());
@@ -2807,6 +2867,7 @@ mod tests {
                 "test".into(),
             )?);
             for view in [
+                View::Outline,
                 View::Sheet,
                 View::Diff,
                 View::Editor,
